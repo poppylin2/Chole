@@ -1,0 +1,194 @@
+﻿[
+    {
+        "path":  "docs\\eqp_knowledge.md",
+        "extension":  ".md",
+        "bytes":  1909,
+        "kb":  2,
+        "sha256":  "DDFFB7C1A4B2A2C284C0C04061368D6BE4DF1DA3B44F31F105A9445D6FF791FA",
+        "modifiedAt":  "2025-12-09T10:12:00.2516094Z"
+    },
+    {
+        "path":  "docs\\fab_defect_rules.md",
+        "extension":  ".md",
+        "bytes":  1935,
+        "kb":  2,
+        "sha256":  "6A446D9F9CA7A8134956DB7A8FA748D8BBBBCEC16DA30968CA1180653C7C66E3",
+        "modifiedAt":  "2025-12-09T10:09:48.7090733Z"
+    },
+    {
+        "path":  "docs\\misc_notes.md",
+        "extension":  ".md",
+        "bytes":  1668,
+        "kb":  2,
+        "sha256":  "04E0747FF5A1516A8803DF8D00BE4927332553DC5F2D990BE7F26F49206E8238",
+        "modifiedAt":  "2025-12-09T10:09:48.7135756Z"
+    },
+    {
+        "path":  "docs\\tables.md",
+        "extension":  ".md",
+        "bytes":  7780,
+        "kb":  8,
+        "sha256":  "A4EDD60C6B70212C9F46C4D6AC72C3DCA4B94C3F8B0F0BACC9433E559F015012",
+        "modifiedAt":  "2025-12-09T10:09:48.7180323Z"
+    },
+    {
+        "path":  "README.md",
+        "extension":  ".md",
+        "bytes":  2524,
+        "kb":  3,
+        "sha256":  "3C41114CE5F0BFBC6852270ED8D1FE9D51E47DF5D217417C5136A43E7AA5095C",
+        "modifiedAt":  "2025-12-09T10:09:48.6754668Z"
+    },
+    {
+        "path":  "requirements.txt",
+        "extension":  ".txt",
+        "bytes":  188,
+        "kb":  1,
+        "sha256":  "BF31E22BDB243F23FEC957E207DD227FC9EB7913E43071A103592CBB83F90D97",
+        "modifiedAt":  "2025-12-09T10:09:48.6884647Z"
+    },
+    {
+        "path":  "src\\agents\\__init__.py",
+        "extension":  ".py",
+        "bytes":  30,
+        "kb":  1,
+        "sha256":  "23FD0C694722584189E17520DF38F37D6E34F8FD4859B1580B26C9FCA3D42695",
+        "modifiedAt":  "2025-12-09T10:09:48.7345040Z"
+    },
+    {
+        "path":  "src\\agents\\aggregator.py",
+        "extension":  ".py",
+        "bytes":  1473,
+        "kb":  2,
+        "sha256":  "928EFC289651D0231BF9FC0184E570A2AB9C8CCD04D6F14DC7BCAD30B38ECA25",
+        "modifiedAt":  "2025-12-09T10:09:48.7379562Z"
+    },
+    {
+        "path":  "src\\agents\\data_analyst.py",
+        "extension":  ".py",
+        "bytes":  8883,
+        "kb":  9,
+        "sha256":  "07B286E7F1C0856C884037B704AF1A1E8BAEAB0EFD67E8C9370E5EF67C4F5D9D",
+        "modifiedAt":  "2025-12-09T10:09:48.7430709Z"
+    },
+    {
+        "path":  "src\\agents\\domain_expert.py",
+        "extension":  ".py",
+        "bytes":  2104,
+        "kb":  3,
+        "sha256":  "3B19750988E24E5635A819E5D436EFFCE0CC4112EC3C0FD6632F0FD9219AAD60",
+        "modifiedAt":  "2025-12-09T10:09:48.7470091Z"
+    },
+    {
+        "path":  "src\\agents\\supervisor.py",
+        "extension":  ".py",
+        "bytes":  4651,
+        "kb":  5,
+        "sha256":  "A6615D14B78F7F39422E2933494EA0B35411380337F8CDAB0D15A9274AF08CC3",
+        "modifiedAt":  "2025-12-09T10:09:48.7510328Z"
+    },
+    {
+        "path":  "src\\app\\__init__.py",
+        "extension":  ".py",
+        "bytes":  30,
+        "kb":  1,
+        "sha256":  "62604820750A894293656C03E1423F8AB1D7AEF761DB7925EA4CE4156A69E6C0",
+        "modifiedAt":  "2025-12-09T10:09:48.7620616Z"
+    },
+    {
+        "path":  "src\\app\\main_streamlit.py",
+        "extension":  ".py",
+        "bytes":  10408,
+        "kb":  11,
+        "sha256":  "33099DD3616CA42F4F15EE1236F5C24C1626B48B43C6EAD899356C72916F8715",
+        "modifiedAt":  "2025-12-09T10:09:48.7647010Z"
+    },
+    {
+        "path":  "src\\core\\__init__.py",
+        "extension":  ".py",
+        "bytes":  34,
+        "kb":  1,
+        "sha256":  "06068AFEA4BD8DCBAEE01984E31338E7387EFBDE60AB5CB24F59FA57B709E175",
+        "modifiedAt":  "2025-12-09T10:09:48.7761178Z"
+    },
+    {
+        "path":  "src\\core\\config.py",
+        "extension":  ".py",
+        "bytes":  911,
+        "kb":  1,
+        "sha256":  "5A476FF2D7F4F135FD469594DD725D5A940F68B1F41B36153462481C1F9DA209",
+        "modifiedAt":  "2025-12-09T10:09:48.7787598Z"
+    },
+    {
+        "path":  "src\\core\\context_loader.py",
+        "extension":  ".py",
+        "bytes":  2517,
+        "kb":  3,
+        "sha256":  "017BC3AEDDAAC8D27BC324A08F7E9063845E189E48B4C74A3CDEB4472DDD7A64",
+        "modifiedAt":  "2025-12-09T10:09:48.7833107Z"
+    },
+    {
+        "path":  "src\\core\\logging_utils.py",
+        "extension":  ".py",
+        "bytes":  713,
+        "kb":  1,
+        "sha256":  "47C31FEB4EFB888F60153AA712377DEE06101DC72040E92614E40A35526AF5C9",
+        "modifiedAt":  "2025-12-09T10:09:48.7863286Z"
+    },
+    {
+        "path":  "src\\core\\models.py",
+        "extension":  ".py",
+        "bytes":  2186,
+        "kb":  3,
+        "sha256":  "DD5CF9E1D4D27AECF070015FF235E0C573174E07E05948C6323413CFB7F2032B",
+        "modifiedAt":  "2025-12-09T10:09:48.7896369Z"
+    },
+    {
+        "path":  "src\\graph\\__init__.py",
+        "extension":  ".py",
+        "bytes":  22,
+        "kb":  1,
+        "sha256":  "9F99890E0020ED55CB24CB524D2EAB55DED597B62CB63FED2FC1FA4DBAFCA48F",
+        "modifiedAt":  "2025-12-09T10:09:48.8018233Z"
+    },
+    {
+        "path":  "src\\graph\\graph_builder.py",
+        "extension":  ".py",
+        "bytes":  5450,
+        "kb":  6,
+        "sha256":  "C6AAEE98823D15568252C7F853DF4972E6C25536B2532F66A90B205E93FDD4A8",
+        "modifiedAt":  "2025-12-09T10:09:48.8043454Z"
+    },
+    {
+        "path":  "src\\tools\\__init__.py",
+        "extension":  ".py",
+        "bytes":  51,
+        "kb":  1,
+        "sha256":  "4C9EBA6951678288B6B9EE11B1165D874323EDBBE20900B064F6A3F417EECA09",
+        "modifiedAt":  "2025-12-09T10:09:48.8148810Z"
+    },
+    {
+        "path":  "src\\tools\\python_tool.py",
+        "extension":  ".py",
+        "bytes":  2205,
+        "kb":  3,
+        "sha256":  "DB1A9DAF4FE2E5224FCD071A84776D26A6FD24FE502A5E414C5535C532E1AA83",
+        "modifiedAt":  "2025-12-09T10:09:48.8192988Z"
+    },
+    {
+        "path":  "src\\tools\\sqlite_tool.py",
+        "extension":  ".py",
+        "bytes":  2635,
+        "kb":  3,
+        "sha256":  "D26FA5B010CB61CF0D2638A0548C74E361203CA9133370A39AC33ED3A3309F80",
+        "modifiedAt":  "2025-12-09T10:09:48.8236841Z"
+    },
+    {
+        "path":  "tests\\test_context_loader.py",
+        "extension":  ".py",
+        "bytes":  404,
+        "kb":  1,
+        "sha256":  "87D29868D626F6B224E4782FD1208136338BAA640356E73B574DE0B632801977",
+        "modifiedAt":  "2025-12-09T10:09:48.8320725Z"
+    }
+]

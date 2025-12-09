@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+from typing import Dict, Iterator, Optional
+
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, StateGraph
+
+from agents.aggregator import aggregator_node
+from agents.data_analyst import data_analyst_node
+from agents.domain_expert import domain_expert_node
+from agents.supervisor import supervisor_node
+from core.config import AppConfig, load_config
+from core.context_loader import load_database_schema, load_markdown_knowledge
+from core.logging_utils import setup_logging
+from core.models import DatabaseSchema, GraphState
+
+
+def build_graph(
+    config: AppConfig,
+    schema: DatabaseSchema,
+    markdown_knowledge: str,
+    table_markdown_index: Dict[str, str],
+    logger=None,
+):
+    """Construct and compile the LangGraph workflow."""
+
+    llm = ChatOpenAI(model=config.model, temperature=0)
+
+    graph = StateGraph(GraphState)
+
+    # Nodes
+    graph.add_node("supervisor", supervisor_node(llm, logger=logger))
+    graph.add_node(
+        "data_analyst",
+        data_analyst_node(
+            llm,
+            db_path=config.db_path,
+            runtime_cache=config.runtime_cache,
+            table_markdown_index=table_markdown_index,
+            max_rows=config.max_sql_rows,
+        ),
+    )
+    graph.add_node("domain_expert", domain_expert_node(llm, logger=logger))
+    graph.add_node("aggregator", aggregator_node(llm, logger=logger))
+
+    def ask_user_node(state: GraphState) -> GraphState:
+        # Supervisor already set pending clarification; nothing else to do.
+        return state
+
+    graph.add_node("ask_user", ask_user_node)
+
+    # Routing
+    def route_supervisor(state: GraphState) -> str:
+        action = state.get("next_action") or {}
+        action_type = action.get("action_type")
+        if action_type in {"sql_analysis", "python_analysis"}:
+            return "data_analyst"
+        if action_type == "domain_explain":
+            return "domain_expert"
+        if action_type == "ask_user":
+            return "ask_user"
+        return "aggregator"
+
+    graph.set_entry_point("supervisor")
+    graph.add_conditional_edges(
+        "supervisor",
+        route_supervisor,
+        {
+            "data_analyst": "data_analyst",
+            "domain_expert": "domain_expert",
+            "ask_user": "ask_user",
+            "aggregator": "aggregator",
+        },
+    )
+    graph.add_edge("data_analyst", "supervisor")
+    graph.add_edge("domain_expert", "supervisor")
+    graph.add_edge("aggregator", END)
+    graph.add_edge("ask_user", END)
+
+    return graph.compile()
+
+
+def _init_app_and_state(
+    user_query: str,
+    clarification_answers: Optional[Dict[str, str]] = None,
+):
+    """
+    Initialize config / logger / schema / markdown / graph / initial state in one place.
+    Shared by run_graph_once and stream_graph.
+    """
+    config = load_config()
+    logger = setup_logging(config.runtime_cache / "agent.log")
+    schema = load_database_schema(config.db_path)
+    markdown_knowledge, table_markdown_index = load_markdown_knowledge(config.docs_path)
+
+    initial_state: GraphState = {
+        "user_query": user_query,
+        "database_schema": schema,
+        "markdown_knowledge": markdown_knowledge,
+        "table_markdown_index": table_markdown_index,
+        "clarification_answers": clarification_answers or {},
+        "step_results": [],
+        "data_artifacts": {},
+        "next_action": None,
+        "pending_clarification": None,
+        "final_answer": None,
+        "loop_count": 0,
+    }
+
+    app = build_graph(
+        config, schema, markdown_knowledge, table_markdown_index, logger=logger
+    )
+    return app, initial_state
+
+
+def run_graph_once(
+    user_query: str,
+    clarification_answers: Optional[Dict[str, str]] = None,
+) -> GraphState:
+    """Execute the whole graph once and return the final GraphState (no streaming for UI)."""
+    app, initial_state = _init_app_and_state(user_query, clarification_answers)
+    return app.invoke(initial_state, config={"recursion_limit": 60})
+
+
+def stream_graph(
+    user_query: str,
+    clarification_answers: Optional[Dict[str, str]] = None,
+) -> Iterator[GraphState]:
+    """
+    Execute the graph in a streaming fashion: after each node finishes, yield the current GraphState.
+
+    On the frontend you can do:
+      for state in stream_graph(...):
+          # update progress bar / debug info / partial answers
+    """
+    app, initial_state = _init_app_and_state(user_query, clarification_answers)
+    for state in app.stream(
+        initial_state,
+        config={"recursion_limit": 60},
+        stream_mode="values",  # Key: directly get GraphState instead of event dicts
+    ):
+        yield state
+
+
+def run_graph(
+    user_query: str,
+    clarification_answers: Optional[Dict[str, str]] = None,
+    stream: bool = False,
+) -> GraphState:
+    """
+    Keep the original interface for use in other places:
+    - stream=False → equivalent to run_graph_once
+    - stream=True  → run stream_graph to completion and return the last state
+    """
+    if stream:
+        last_state: Optional[GraphState] = None
+        for state in stream_graph(user_query, clarification_answers):
+            last_state = state
+        if last_state is None:
+            # Should not normally happen; just a safety fallback
+            return run_graph_once(user_query, clarification_answers)
+        return last_state
+    else:
+        return run_graph_once(user_query, clarification_answers)
