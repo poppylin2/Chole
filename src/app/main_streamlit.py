@@ -294,7 +294,8 @@ if prompt:
                 answer_placeholder.markdown("No answer generated.")
 
             with st.expander("Debug details"):
-                st.write(json.dumps(final_debug_info, indent=2))
+                # st.write(json.dumps(final_debug_info, indent=2))
+                st.json(final_debug_info, expanded=2)
 
         # ----- Update stored assistant messages -----
         if final_state is None:
