@@ -5,6 +5,17 @@
 - Four tools: `8950XR-P1`, `8950XR-P2`, `8950XR-P3`, `8950XR-P4`.
 - Same platform, same recipes; health can differ per tool.
 
+### System vs Tool
+
+- In this agent, **one physical tool = one "system"**.
+- When a user asks "How's the system health?", it should be interpreted as
+  "How is the health of a specific tool (e.g. `8950XR-P2`)?"
+- The agent **must not** silently aggregate across all tools when answering
+  a "system health" question.
+- If the user does **not** specify which tool (tool_id) they mean, the agent
+  should first ask:
+  > Which tool do you want me to check? (8950XR-P1, 8950XR-P2, 8950XR-P3, 8950XR-P4)
+
 ## 2. Subsystems
 
 Each tool has 4 subsystems:

@@ -54,3 +54,8 @@ When investigating a (tool, recipe) problem:
   - One clear tool drift example: `P2` + `S13Layer`.
   - One clear process drift example: `WadiLayer` across tools.
 - Intended for agent reasoning / demo, not real fab production data.
+
+## 6. System Health Questions
+
+- Treat each tool as a separate "system".
+- If no tool_id is provided, ask the user to choose one.

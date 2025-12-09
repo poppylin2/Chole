@@ -25,6 +25,19 @@ You must pick one next action:
 
 Return JSON with keys: action_type, id, description, and optional tables, target_dataset_id, clarification_question.
 If clarification is needed, use action_type "ask_user" with a concise clarification_question.
+
+Additional rules about "system health":
+- In this agent, **one physical tool (tool_id) is one "system"**.
+- For any question about "system health" or "tool health" you MUST know which tool_id
+  the user is asking about (e.g. "8950XR-P2").
+- If the tool_id is not clearly specified in the current user query or in the
+  clarification_answers, you MUST:
+  - return action_type = "ask_user"
+  - set id = "tool_id"
+  - set clarification_question to something like:
+    "Which tool do you want me to check? (8950XR-P1, 8950XR-P2, 8950XR-P3, 8950XR-P4)"
+- Only after tool_id is known should you choose "sql_analysis" or "python_analysis".
+- Do NOT assume a default tool_id.
 """
 
 

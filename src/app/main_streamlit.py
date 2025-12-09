@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict
+from typing import Dict, List
 
 import streamlit as st
 
@@ -10,7 +10,7 @@ from graph.graph_builder import stream_graph
 st.set_page_config(page_title="Fab Data Analysis Agent", layout="wide")
 st.title("Fab Data Analysis Agent")
 
-# ----- Initialize session state -----
+# ----- Initialize session states -----
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "clarification_answers" not in st.session_state:
@@ -20,65 +20,99 @@ if "pending_clarification" not in st.session_state:
 if "last_user_query" not in st.session_state:
     st.session_state.last_user_query = ""
 
-# ----- Define pipeline node model for progress bar -----
-PIPELINE_NODES = [
-    {"id": "supervisor", "label": "1. Plan / Route"},
-    {"id": "data_analyst", "label": "2. Data Analysis"},
-    {"id": "domain_expert", "label": "3. Domain Expert"},
-    {"id": "aggregator", "label": "4. Final Answer"},
-]
 
+# ----- Dynamic node construction & rendering -----
 
-def infer_pipeline_status(step_results, final_answer: str | None):
+def build_pipeline_nodes(
+    step_results: List[Dict],
+    final_answer: str | None,
+    pending_clarification: Dict | None,
+) -> List[Dict[str, str]]:
     """
-    Infer each node's status based on step_results and final_answer:
-    - 'done'
-    - 'current'
-    - 'todo'
+    Dynamically build a sequence of nodes based on the current state,
+    including step_results / final_answer / pending_clarification.
+
+    Example:
+      Plan / Supervisor
+      → SQL Analysis #1
+      → Domain Explain #1
+      → SQL Analysis #2
+      → Final Answer
     """
-    status = {node["id"]: "todo" for node in PIPELINE_NODES}
+    nodes: List[Dict[str, str]] = []
 
-    has_sql_or_py = any(
-        s.get("step_type") in ("sql_analysis", "python_analysis") for s in step_results
-    )
-    has_domain = any(s.get("step_type") == "domain_explain" for s in step_results)
+    # Always start with a "Plan / Supervisor" node
+    nodes.append({"id": "plan", "label": "Plan / Supervisor"})
 
-    # As long as execution has started, consider Supervisor as done
-    if step_results or final_answer or has_sql_or_py or has_domain:
-        status["supervisor"] = "done"
+    # Append nodes according to step_results, preserving order,
+    # and automatically numbering nodes of the same step_type.
+    type_counts: Dict[str, int] = {
+        "sql_analysis": 0,
+        "python_analysis": 0,
+        "domain_explain": 0,
+    }
 
-    if has_sql_or_py:
-        status["data_analyst"] = "done"
+    for idx, step in enumerate(step_results):
+        stype = step.get("step_type")
+        if stype not in ("sql_analysis", "python_analysis", "domain_explain", "finish"):
+            continue
 
-    if has_domain:
-        status["domain_expert"] = "done"
-
-    if final_answer:
-        status["aggregator"] = "done"
-
-    ordered_ids = [n["id"] for n in PIPELINE_NODES]
-    done_indices = [i for i, nid in enumerate(ordered_ids) if status[nid] == "done"]
-
-    if not done_indices:
-        # Before starting, the current node is supervisor
-        status["supervisor"] = "current"
-    else:
-        last_done_idx = max(done_indices)
-        # If there is no final answer yet, the next node is current
-        if last_done_idx < len(ordered_ids) - 1 and not final_answer:
-            next_id = ordered_ids[last_done_idx + 1]
-            status[next_id] = "current"
+        if stype in type_counts:
+            type_counts[stype] += 1
+            num = type_counts[stype]
         else:
-            # Already at the last done node
-            status[ordered_ids[last_done_idx]] = "current"
+            num = 1
 
+        if stype == "sql_analysis":
+            label = f"SQL Analysis #{num}"
+        elif stype == "python_analysis":
+            label = f"Python Analysis #{num}"
+        elif stype == "domain_explain":
+            label = f"Domain Explain #{num}"
+        elif stype == "finish":
+            label = "Finish"
+        else:
+            label = stype
+
+        nodes.append({"id": f"{stype}_{idx}", "label": label})
+
+    # If the graph execution ends with an ask_user step (pending_clarification exists and no final_answer yet)
+    if pending_clarification and not final_answer:
+        nodes.append({"id": "clarify", "label": "Clarification Needed"})
+
+    # If a final answer exists, add a Final Answer node
+    if final_answer:
+        nodes.append({"id": "aggregator", "label": "Final Answer"})
+
+    return nodes
+
+
+def infer_dynamic_status(nodes: List[Dict[str, str]]) -> Dict[str, str]:
+    """
+    Assign status to each node:
+    - All nodes except the last: done
+    - Last node: current
+
+    We do NOT draw "future todo nodes" because Supervisor's decisions are dynamic.
+    """
+    status: Dict[str, str] = {}
+    if not nodes:
+        return status
+
+    last_index = len(nodes) - 1
+    for idx, node in enumerate(nodes):
+        nid = node["id"]
+        if idx < last_index:
+            status[nid] = "done"
+        else:
+            status[nid] = "current"
     return status
 
 
-def render_pipeline(status: Dict[str, str]) -> str:
+def render_pipeline(nodes: List[Dict[str, str]], status: Dict[str, str]) -> str:
     """
-    Render node status as a horizontal HTML progress bar.
-    done = green, current = blue, todo = gray.
+    Render nodes + status into a horizontal HTML progress bar.
+    done = green, current = blue.
     """
     css = """
     <style>
@@ -87,6 +121,8 @@ def render_pipeline(status: Dict[str, str]) -> str:
         align-items: center;
         margin-bottom: 1rem;
         font-size: 0.9rem;
+        flex-wrap: wrap;
+        row-gap: 0.5rem;
     }
     .pipeline-step {
         display: flex;
@@ -103,21 +139,21 @@ def render_pipeline(status: Dict[str, str]) -> str:
     }
     .pipeline-label {
         text-align: center;
-        max-width: 140px;
+        max-width: 160px;
         white-space: normal;
     }
     .pipeline-connector {
-        flex: 1;
+        flex: 0 0 40px;
         height: 2px;
         background-color: #e0e0e0;
         margin: 0 8px;
     }
     .pipeline-circle.done {
-        background-color: #34a853;  /* green */
+        background-color: #34a853;
         border-color: #34a853;
     }
     .pipeline-circle.current {
-        background-color: #4285f4;  /* blue */
+        background-color: #4285f4;
         border-color: #4285f4;
     }
     .pipeline-label.done {
@@ -139,7 +175,7 @@ def render_pipeline(status: Dict[str, str]) -> str:
     """
 
     parts = [css, '<div class="pipeline-container">']
-    for idx, node in enumerate(PIPELINE_NODES):
+    for idx, node in enumerate(nodes):
         nid = node["id"]
         label = node["label"]
         s = status.get(nid, "todo")
@@ -152,8 +188,8 @@ def render_pipeline(status: Dict[str, str]) -> str:
         parts.append(f'<div class="{label_class}">{label}</div>')
         parts.append("</div>")
 
-        # Connector between nodes
-        if idx < len(PIPELINE_NODES) - 1:
+        # Draw connector lines between nodes
+        if idx < len(nodes) - 1:
             prev_status = status.get(nid, "todo")
             connector_color = "#e0e0e0"
             if prev_status in ("done", "current"):
@@ -167,6 +203,7 @@ def render_pipeline(status: Dict[str, str]) -> str:
 
 
 # ----- Render conversation history -----
+
 def render_history():
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
@@ -183,24 +220,21 @@ prompt = st.chat_input("Ask about fab inspection data or equipment insights")
 
 if prompt:
     user_query = prompt
-    # Bring in previously recorded clarification answers
     clarification_payload = dict(st.session_state.clarification_answers)
 
-    # If we are currently answering a clarification question, record this input under the corresponding clar_id
+    # If currently answering a clarification question
     if st.session_state.pending_clarification:
         clar_id = st.session_state.pending_clarification.get("id")
         if clar_id:
             clarification_payload[clar_id] = prompt
-            # Sync back to global clarification_answers for multi-round clarification
             st.session_state.clarification_answers[clar_id] = prompt
-        # The actual query for this run is the original user_query
         user_query = st.session_state.last_user_query or prompt
         st.session_state.pending_clarification = None
     else:
-        # For a new question, record it for later reuse in multi-round clarifications
+        # New user query
         st.session_state.last_user_query = user_query
 
-    # First append the user's message to history
+    # Store user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -209,12 +243,12 @@ if prompt:
         final_state = None
         final_debug_info = None
 
-        # Assistant message: contains "pipeline progress bar + answer + debug"
+        # Assistant message: live-updating pipeline + answer
         with st.chat_message("assistant"):
             pipeline_placeholder = st.empty()
             answer_placeholder = st.empty()
 
-            # Core: stream the graph; after each step update the progress bar
+            # ★ Stream graph execution and update UI nodes at each step
             for state in stream_graph(
                 user_query, clarification_answers=clarification_payload
             ):
@@ -222,23 +256,27 @@ if prompt:
 
                 step_results = state.get("step_results", [])
                 final_answer = state.get("final_answer")
-                pipeline_status = infer_pipeline_status(step_results, final_answer)
-                pipeline_html = render_pipeline(pipeline_status)
+                pending = state.get("pending_clarification")
+
+                nodes = build_pipeline_nodes(step_results, final_answer, pending)
+                node_status = infer_dynamic_status(nodes)
+                pipeline_html = render_pipeline(nodes, node_status)
                 pipeline_placeholder.markdown(pipeline_html, unsafe_allow_html=True)
 
-                # If a final answer is already available, show it early
                 if final_answer:
                     answer_placeholder.markdown(final_answer)
 
-            # Final state after the graph finishes
+            # Final state after graph execution completes
             if final_state is None:
                 final_answer = "No answer generated."
                 step_results = []
                 datasets = {}
+                pending = None
             else:
                 final_answer = final_state.get("final_answer")
                 step_results = final_state.get("step_results", [])
                 datasets = final_state.get("data_artifacts", {})
+                pending = final_state.get("pending_clarification")
 
             final_debug_info = {
                 "actions": [step.get("step_type") for step in step_results],
@@ -246,9 +284,8 @@ if prompt:
                 "datasets": datasets,
             }
 
-            pending = final_state.get("pending_clarification") if final_state else None
+            # If this round requires clarification, show the clarification question instead of the final answer
             if pending and not final_answer:
-                # This round is asking a clarification question
                 question = pending.get("question", "Please provide more detail.")
                 answer_placeholder.markdown(question)
             elif final_answer:
@@ -256,23 +293,18 @@ if prompt:
             else:
                 answer_placeholder.markdown("No answer generated.")
 
-            # Debug info for this round
             with st.expander("Debug details"):
                 st.write(json.dumps(final_debug_info, indent=2))
 
-        # ----- After graph execution, update st.session_state.messages -----
+        # ----- Update stored assistant messages -----
         if final_state is None:
-            # Should not normally happen, just a fallback
             st.session_state.pending_clarification = None
             st.session_state.last_user_query = user_query
         else:
             pending = final_state.get("pending_clarification")
             if pending and not final_answer:
-                # Next round will need user's clarification
                 st.session_state.pending_clarification = pending
-                content_to_store = pending.get(
-                    "question", "Please provide more detail."
-                )
+                content_to_store = pending.get("question", "Please provide more detail.")
             else:
                 st.session_state.pending_clarification = None
                 content_to_store = final_answer or "No answer generated."
@@ -286,7 +318,7 @@ if prompt:
             }
             st.session_state.messages.append(msg)
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         error_text = (
             "An error occurred while processing your request. "
             "Please try again.\n\n"
