@@ -1,4 +1,4 @@
-# Defect & Drift Rules (Compact)
+# Defect & Drift Rules
 
 ## 1. Time Window
 - Use latest `inspection_runs.start_time` as `window_end`.
