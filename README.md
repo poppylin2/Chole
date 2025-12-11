@@ -63,3 +63,12 @@ Fab Data Analysis Agent
 - Tools write intermediate CSVs and plots to `runtime_cache/`.
 - OpenAI API key should be available via `OPENAI_API_KEY`.
 - Dockerfile is left as a TODO stub.
+
+
+uv run python -m tools.ingest_manuals
+
+How’s the system health for 8950XR-P2 over the last 7 days?
+
+How to open KTGem Deep View 2.0 Application?
+
+What is the defect rate trend for the 8950XR-P2 from 20251201 to 20251207? Create a line chart.

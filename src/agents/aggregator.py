@@ -40,8 +40,13 @@ Constraints:
 For non-health questions, still follow:
 - Short summary first
 - Then a few key bullets or short paragraphs with the most relevant details only.
-"""
 
+For questions answered via documentation search (RAG), you may see steps with
+step_type "rag_qa" and a "rag_hits" field containing text snippets from manuals.
+Use those snippets as primary evidence when forming your answer, but still keep
+the reply compact and user-friendly.
+
+"""
 
 
 def aggregator_node(llm: ChatOpenAI, logger: logging.Logger | None = None):

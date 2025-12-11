@@ -13,6 +13,10 @@ from core.config import AppConfig, load_config
 from core.context_loader import load_database_schema, load_markdown_knowledge
 from core.logging_utils import setup_logging
 from core.models import DatabaseSchema, GraphState
+from agents.rag_qa import rag_qa_node
+from agents.visualizer import visualizer_node
+
+from tools.rag_tool import RagTool, RagToolConfig
 
 
 def build_graph(
@@ -28,6 +32,15 @@ def build_graph(
 
     graph = StateGraph(GraphState)
 
+    # ★ Initialize RagTool
+    rag_tool = RagTool(
+        RagToolConfig(
+            chroma_dir=config.chroma_dir or (config.runtime_cache / "chroma"),
+            embedding_model=config.rag_embedding_model,
+            collection_name="manual",
+        )
+    )
+
     # Nodes
     graph.add_node("supervisor", supervisor_node(llm, logger=logger))
     graph.add_node(
@@ -42,6 +55,10 @@ def build_graph(
     )
     graph.add_node("domain_expert", domain_expert_node(llm, logger=logger))
     graph.add_node("aggregator", aggregator_node(llm, logger=logger))
+    graph.add_node("visualizer", visualizer_node(llm, runtime_cache=config.runtime_cache))
+
+    # ★ Add RAG node (does not require llm)
+    graph.add_node("rag_qa", rag_qa_node(rag_tool=rag_tool, logger=logger))
 
     def ask_user_node(state: GraphState) -> GraphState:
         # Supervisor already set pending clarification; nothing else to do.
@@ -57,6 +74,10 @@ def build_graph(
             return "data_analyst"
         if action_type == "domain_explain":
             return "domain_expert"
+        if action_type == "rag_qa":  # ★ New branch
+            return "rag_qa"
+        if action_type == "visualize":
+            return "visualizer"
         if action_type == "ask_user":
             return "ask_user"
         return "aggregator"
@@ -68,12 +89,16 @@ def build_graph(
         {
             "data_analyst": "data_analyst",
             "domain_expert": "domain_expert",
+            "rag_qa": "rag_qa",  # ★ Added
+            "visualizer": "visualizer",
             "ask_user": "ask_user",
             "aggregator": "aggregator",
         },
     )
     graph.add_edge("data_analyst", "supervisor")
     graph.add_edge("domain_expert", "supervisor")
+    graph.add_edge("rag_qa", "supervisor")  # ★ Added: after RAG return to Supervisor
+    graph.add_edge("visualizer", "supervisor")
     graph.add_edge("aggregator", END)
     graph.add_edge("ask_user", END)
 

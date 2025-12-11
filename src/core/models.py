@@ -43,7 +43,15 @@ class DatasetArtifact(TypedDict):
 
 class StepResult(TypedDict, total=False):
     step_id: str
-    step_type: Literal["sql_analysis", "python_analysis", "domain_explain", "ask_user", "finish"]
+    step_type: Literal[
+        "sql_analysis",
+        "python_analysis",
+        "domain_explain",
+        "rag_qa",
+        "visualize",
+        "ask_user",
+        "finish",
+    ]
     summary: str
     dataset_id: Optional[str]
     dataset_path: Optional[str]
@@ -61,7 +69,15 @@ class ClarificationRequest(TypedDict):
 
 
 class NextAction(TypedDict, total=False):
-    action_type: Literal["sql_analysis", "python_analysis", "domain_explain", "ask_user", "finish"]
+    action_type: Literal[
+        "sql_analysis",
+        "python_analysis",
+        "domain_explain",
+        "rag_qa",
+        "visualize",
+        "ask_user",
+        "finish",
+    ]
     id: str
     description: str
     tables: Optional[List[str]]

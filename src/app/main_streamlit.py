@@ -23,6 +23,7 @@ if "last_user_query" not in st.session_state:
 
 # ----- Dynamic node construction & rendering -----
 
+
 def build_pipeline_nodes(
     step_results: List[Dict],
     final_answer: str | None,
@@ -50,11 +51,20 @@ def build_pipeline_nodes(
         "sql_analysis": 0,
         "python_analysis": 0,
         "domain_explain": 0,
+        "rag_qa": 0,
+        "visualize": 0,
     }
 
     for idx, step in enumerate(step_results):
         stype = step.get("step_type")
-        if stype not in ("sql_analysis", "python_analysis", "domain_explain", "finish"):
+        if stype not in (
+            "sql_analysis",
+            "python_analysis",
+            "domain_explain",
+            "rag_qa",
+            "finish",
+            "visualize",
+        ):
             continue
 
         if stype in type_counts:
@@ -69,6 +79,10 @@ def build_pipeline_nodes(
             label = f"Python Analysis #{num}"
         elif stype == "domain_explain":
             label = f"Domain Explain #{num}"
+        elif stype == "rag_qa":
+            label = f"RAG #{num}"
+        elif stype == "visualize":
+            label = f"Visualize #{num}"
         elif stype == "finish":
             label = "Finish"
         else:
@@ -204,10 +218,21 @@ def render_pipeline(nodes: List[Dict[str, str]], status: Dict[str, str]) -> str:
 
 # ----- Render conversation history -----
 
+
 def render_history():
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            if msg.get("pipeline_html"):
+                st.markdown(msg["pipeline_html"], unsafe_allow_html=True)
+            if msg.get("plots"):
+                st.markdown("Plots:")
+                seen = set()
+                for path, sid in msg["plots"]:
+                    if not path or path in seen:
+                        continue
+                    seen.add(path)
+                    st.image(path, caption=f"Step {sid}", use_column_width=True)
             if msg.get("debug"):
                 with st.expander("Debug details"):
                     st.write(msg["debug"])
@@ -247,6 +272,8 @@ if prompt:
         with st.chat_message("assistant"):
             pipeline_placeholder = st.empty()
             answer_placeholder = st.empty()
+            plots_placeholder = st.container()
+            pipeline_html = ""
 
             # ★ Stream graph execution and update UI nodes at each step
             for state in stream_graph(
@@ -293,6 +320,25 @@ if prompt:
             else:
                 answer_placeholder.markdown("No answer generated.")
 
+            # Render any plot artifacts from step_results
+            plot_entries = []
+            for step in step_results:
+                paths = step.get("plots") or []
+                if isinstance(paths, str):
+                    paths = [paths]
+                for p in paths:
+                    plot_entries.append((p, step.get("step_id", "plot")))
+
+            if plot_entries:
+                with plots_placeholder:
+                    st.markdown("Plots:")
+                    seen = set()
+                    for path, sid in plot_entries:
+                        if not path or path in seen:
+                            continue
+                        seen.add(path)
+                        st.image(path, caption=f"Step {sid}", use_column_width=True)
+
             with st.expander("Debug details"):
                 # st.write(json.dumps(final_debug_info, indent=2))
                 st.json(final_debug_info, expanded=2)
@@ -305,7 +351,9 @@ if prompt:
             pending = final_state.get("pending_clarification")
             if pending and not final_answer:
                 st.session_state.pending_clarification = pending
-                content_to_store = pending.get("question", "Please provide more detail.")
+                content_to_store = pending.get(
+                    "question", "Please provide more detail."
+                )
             else:
                 st.session_state.pending_clarification = None
                 content_to_store = final_answer or "No answer generated."
@@ -316,6 +364,8 @@ if prompt:
                 "debug": (
                     json.dumps(final_debug_info, indent=2) if final_debug_info else None
                 ),
+                "pipeline_html": pipeline_html,
+                "plots": plot_entries,
             }
             st.session_state.messages.append(msg)
 

@@ -20,8 +20,23 @@ You must pick one next action:
 - "sql_analysis": ask data analyst to create SQL for the database.
 - "python_analysis": ask data analyst to run python on existing datasets.
 - "domain_explain": ask domain expert to interpret numeric findings with domain knowledge.
+- "visualize": plot datasets (line/bar/scatter) using matplotlib via the python tool.
+- "rag_qa": run RAG search over equipment manuals / PDFs and prepare context for answering.
 - "ask_user": request a clarification question and stop the loop.
 - "finish": finalize and hand off to result aggregator.
+
+RAG vs data rules:
+- Use "rag_qa" when the user is asking about manuals, troubleshooting steps, how-to
+  procedures, parameter meanings, configuration options, or conceptual questions that
+  are likely answered by documentation (PDF manuals).
+- Use "sql_analysis" / "python_analysis" when the question clearly requires looking at
+  recent inspection_runs, drift patterns, defect/align ratios, or other numeric analytics.
+- RAG and database analytics are independent; do NOT try to mix them in the same step.
+- For visualization/trend/compare questions ("趋势", "trend", "chart", "plot", "对比"):
+  - If no dataset exists yet → pick "sql_analysis" first to fetch data.
+  - If a dataset exists and no plot has been created → pick "visualize" with
+    target_dataset_id set to the dataset you want to plot.
+  - Do not keep repeating visualize once a plot step exists; then move to "finish" or "domain_explain".
 
 Return JSON with keys: action_type, id, description, and optional tables, target_dataset_id, clarification_question.
 If clarification is needed, use action_type "ask_user" with a concise clarification_question.
@@ -70,6 +85,70 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
             state["pending_clarification"] = None
             return state
 
+        # If we already have RAG results, don't loop endlessly—go straight to finish.
+        rag_steps = [
+            s for s in state.get("step_results", []) if s.get("step_type") == "rag_qa"
+        ]
+        if rag_steps:
+            state["next_action"] = {
+                "action_type": "finish",
+                "id": "finish_rag",
+                "description": "RAG search completed; aggregate the manual snippets for the user.",
+            }
+            state["pending_clarification"] = None
+            if logger:
+                logger.info(
+                    "[supervisor] rag_qa already ran (%s steps); finishing to avoid loops.",
+                    len(rag_steps),
+                )
+            return state
+
+        def _has_visualization_step() -> bool:
+            return any(s.get("step_type") == "visualize" for s in state.get("step_results", []))
+
+        def _needs_visualization(query: str) -> bool:
+            if _has_visualization_step():
+                return False
+            q = (query or "").lower()
+            keywords = [
+                "trend",
+                "over time",
+                "time series",
+                "chart",
+                "plot",
+                "graph",
+                "compare",
+                "comparison",
+                "bar",
+                "line",
+                "折线",
+                "柱状",
+                "趋势",
+                "对比",
+                "变化",
+            ]
+            return any(k in q for k in keywords)
+
+        # If user intent is visualization and data already exists, route to visualizer once.
+        if _needs_visualization(state.get("user_query", "")):
+            data_artifacts = state.get("data_artifacts", {})
+            if data_artifacts:
+                # Pick the most recent dataset_id
+                target_dataset_id = next(reversed(data_artifacts.keys()))
+                state["next_action"] = {
+                    "action_type": "visualize",
+                    "id": "visualize",
+                    "description": "Create plots for the latest dataset to answer the question.",
+                    "target_dataset_id": target_dataset_id,
+                }
+                state["pending_clarification"] = None
+                if logger:
+                    logger.info(
+                        "[supervisor] visualization intent detected; routing to visualizer with dataset=%s",
+                        target_dataset_id,
+                    )
+                return state
+
         schema: DatabaseSchema = state.get("database_schema", DatabaseSchema(tables=[]))  # type: ignore
         schema_text = json.dumps(schema.to_dict())
         markdown = state.get("markdown_knowledge", "")
@@ -92,7 +171,11 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
 
         response = llm.invoke(messages)
         content = response.content if hasattr(response, "content") else ""
-        next_action: NextAction = {"action_type": "finish", "id": "finish", "description": "Provide final answer."}
+        next_action: NextAction = {
+            "action_type": "finish",
+            "id": "finish",
+            "description": "Provide final answer.",
+        }
         try:
             parsed = json.loads(content)
             if isinstance(parsed, dict) and "action_type" in parsed:
@@ -106,10 +189,21 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
             }
 
         state["next_action"] = next_action
+        # Avoid repeated visualize loops; if we already attempted visualize, finish instead.
+        if next_action.get("action_type") == "visualize" and _has_visualization_step():
+            next_action = {
+                "action_type": "finish",
+                "id": "finish_after_visualize",
+                "description": "Visualization already attempted; proceed to final answer.",
+            }
+            state["next_action"] = next_action
+
         if next_action.get("action_type") == "ask_user":
             state["pending_clarification"] = {
                 "id": next_action.get("id", "clarify"),
-                "question": next_action.get("clarification_question", "Please provide more detail."),
+                "question": next_action.get(
+                    "clarification_question", "Please provide more detail."
+                ),
             }
         else:
             state["pending_clarification"] = None

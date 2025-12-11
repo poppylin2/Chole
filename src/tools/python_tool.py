@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import uuid
+import traceback
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Dict
@@ -26,6 +27,7 @@ SAFE_BUILTINS = {
     "int": int,
     "enumerate": enumerate,
     "zip": zip,
+    "__import__": __import__,
 }
 
 
@@ -59,7 +61,29 @@ def run_python_analysis(
         with redirect_stdout(stdout_buffer):
             exec(code, global_ctx, local_ctx)
     except Exception as exc:
-        return {"status": "error", "error_message": str(exc)}
+        tb = traceback.format_exc()
+        # Try to show the failing line in the generated code for easier debugging.
+        snippet = ""
+        try:
+            tb_frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ else []
+            if tb_frames:
+                lineno = tb_frames[-1].lineno or 0
+                lines = code.splitlines()
+                start = max(0, lineno - 3)
+                end = min(len(lines), lineno + 2)
+                snippet = "\n".join(f"{idx+1}: {lines[idx]}" for idx in range(start, end))
+        except Exception:
+            snippet = ""
+
+        msg_parts = [str(exc)]
+        if snippet:
+            msg_parts.append(f"code_snippet:\n{snippet}")
+        msg_parts.append(f"traceback:\n{tb}")
+        error_text = "\n".join(msg_parts)
+        # Truncate to keep the message manageable
+        if len(error_text) > 4000:
+            error_text = error_text[:4000] + "\n...truncated..."
+        return {"status": "error", "error_message": error_text}
 
     output_text = stdout_buffer.getvalue().strip()
     result_obj = local_ctx.get("result")
