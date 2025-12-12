@@ -24,7 +24,7 @@ Each tool has 4 subsystems:
    - Spec: wafer center points (x, y) should range from `[-150, 150]`.
    - This subsystem is degraded if wafer center out-of-spec ratio is more than 5%.
 
-2. `Canera`
+2. `Camera`
    - Image acquisition.
 
 3. `Focus`

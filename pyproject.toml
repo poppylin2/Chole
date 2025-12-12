@@ -42,6 +42,6 @@ packages = [
     "src/agents",
     "src/app",
     "src/core",
-    "src/graphs",
+    "src/graph",
     "src/tools",
 ]

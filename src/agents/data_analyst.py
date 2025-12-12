@@ -38,7 +38,7 @@ TOOL_ID_RE = re.compile(r"^8950XR-P[1-4]$", flags=re.IGNORECASE)
 def strip_code_fence(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
-        text = re.sub(r"^```\\w*\\s*", "", text)
+        text = re.sub(r"^```\w*\s*", "", text, flags=re.IGNORECASE)
     if text.endswith("```"):
         text = text[: text.rfind("```")]
     return text.strip()

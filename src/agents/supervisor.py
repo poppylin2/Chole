@@ -240,6 +240,40 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                 return state
 
         # ---------------------------------------------------------
+        # 2b) Manual / how-to style questions → go straight to RAG
+        # ---------------------------------------------------------
+        rag_intent_tokens = [
+            "install",
+            "setup",
+            "open",
+            "launch",
+            "start",
+            "how to",
+            "manual",
+            "guide",
+            "operate",
+            "troubleshoot",
+        ]
+        if any(tok in ql for tok in rag_intent_tokens):
+            rag_action: NextAction = {
+                "action_type": "rag_qa",
+                "id": "rag_manual",
+                "description": "Search manuals for instructions.",
+                "top_k": 6,
+            }
+            state["action_queue"] = [
+                rag_action,
+                {
+                    "action_type": "finish",
+                    "id": "finish",
+                    "description": "Summarize RAG findings.",
+                },
+            ]
+            state["next_action"] = state["action_queue"].pop(0)
+            state["pending_clarification"] = None
+            return state
+
+        # ---------------------------------------------------------
         # 3) Otherwise fall back to the LLM supervisor (generic questions, RAG, etc.)
         # ---------------------------------------------------------
         schema: DatabaseSchema = state.get("database_schema", DatabaseSchema(tables=[]))  # type: ignore

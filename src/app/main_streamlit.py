@@ -235,7 +235,11 @@ def render_history():
                     st.image(path, caption=f"Step {sid}", use_column_width=True)
             if msg.get("debug"):
                 with st.expander("Debug details"):
-                    st.write(msg["debug"])
+                    debug_payload = msg["debug"]
+                    if isinstance(debug_payload, str):
+                        st.json(debug_payload, expanded=2)
+                    else:
+                        st.json(debug_payload, expanded=2)
 
 
 render_history()
@@ -361,9 +365,7 @@ if prompt:
             msg = {
                 "role": "assistant",
                 "content": content_to_store,
-                "debug": (
-                    json.dumps(final_debug_info, indent=2) if final_debug_info else None
-                ),
+                "debug": final_debug_info,
                 "pipeline_html": pipeline_html,
                 "plots": plot_entries,
             }
