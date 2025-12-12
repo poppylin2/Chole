@@ -60,6 +60,16 @@ subsystem / Stage / wafer-center behavior:
    - Examples: perform a specific Stage calibration, or monitor a recipe on all
      tools for a few more days.
 
+### Subsystem health rule (explicit)
+
+- Subsystem health is decided by **calibration overdue** and, for Stage, **wafer-center abnormality** (`wc_points`).
+- Do **not** use `defects_daily` drift labels to set subsystem health.
+- Per subsystem:
+  - If any calibration for that subsystem is overdue → subsystem is Unhealthy.
+  - Stage: if `wc_abnormal_ratio > 0.05` this week → Stage is Unhealthy.
+  - If neither condition is met → subsystem is Healthy.
+- Overall subsystem health for a tool = Healthy only if all subsystems are Healthy; otherwise Unhealthy.
+
 ---
 
 ## A MUST-FOLLOW Demo Conversation Pattern

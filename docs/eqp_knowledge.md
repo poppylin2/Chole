@@ -34,6 +34,12 @@ Each tool has 4 subsystems:
    - Light source / illumination control.
    - Calibrated via `Illumination` calibration type.
 
+Subsystem health rules:
+- A subsystem is Unhealthy if any of its calibrations are overdue.
+- Stage is also Unhealthy if wafer center out-of-spec ratio (`wc_points`) is more than 5% this week.
+- Otherwise the subsystem is Healthy.
+- Overall subsystem health for a tool is Healthy only if all subsystems are Healthy (based on the above); this is independent of the defects_daily drift verdict.
+
 ## 3. Calibration Types
 
 From `calibrations.cal_name`:

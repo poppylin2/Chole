@@ -16,16 +16,13 @@ Hard rules:
 - calibrations and wc_points are supporting evidence only; do not override the verdict.
 
 Output style:
-- Keep it compact.
-- Preserve markdown tables if present (do NOT rewrite tables into plain bullets).
-
-If a "domain_explain" step exists, use it as the main body and lightly edit for clarity.
-Otherwise:
-1) Verdict (1–2 sentences)
-2) Defect evidence table
-3) Optional next steps (0–2 bullets)
-
-Do not include raw SQL or debug.
+- Keep it compact; preserve markdown tables if present (do NOT rewrite tables into plain bullets).
+- If a "domain_explain" step exists, use it as the main body and lightly edit for clarity.
+- Otherwise, answer the user question directly using the available step_results (sql_analysis/python_analysis/visualize/rag_qa):
+  - Summarize the key numbers/rows/plots; include a short markdown table when helpful.
+  - Do NOT force a health/drift verdict for generic data questions.
+  - Mention important errors if a step failed.
+- Do not include raw SQL or debug.
 """
 
 

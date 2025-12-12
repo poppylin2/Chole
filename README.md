@@ -67,8 +67,13 @@ Fab Data Analysis Agent
 
 uv run python -m tools.ingest_manuals
 
-How’s the system health for 8950XR-P2 over the last 7 days?
+how's system health?    8950XR-P1
 
 How to open KTGem Deep View 2.0 Application?
 
-What is the defect rate trend for the 8950XR-P1 from 20251201 to 20251207? Create a line chart.
+Create a line chart to show the defect rate trend for the 8950XR-P1 from 20251201 to 20251207.
+
+how's the subsystem health of 8950XR-P1?
+
+is there any calibration overdue
+

@@ -121,6 +121,7 @@ def _init_app_and_state(
         "pending_clarification": None,
         "final_answer": None,
         "loop_count": 0,
+        "subsystem_mode": False,
     }
 
     app = build_graph(
