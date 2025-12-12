@@ -11,48 +11,27 @@ from core.models import GraphState
 AGGREGATOR_PROMPT = """
 You are the final responder for a fab data analysis agent.
 
-General style:
-- Always give a short summary first.
-- Then provide only the most important supporting evidence.
-- Keep answers compact and avoid repeating internal debug details, SQL, or long tables.
+Hard rules:
+- Health verdict (Healthy/Unhealthy) and drift labels must come ONLY from defects_daily-based analysis steps.
+- calibrations and wc_points are supporting evidence only; do not override the verdict.
 
-For questions about system health, tool health, or drift:
-1) Start with an **Overall health** statement (1–2 short sentences), clearly saying whether the
-   tool/system is:
-   - Healthy / within normal range, OR
-   - Degraded but still acceptable, OR
-   - Unhealthy / at-risk.
+Output style:
+- Keep it compact.
+- Preserve markdown tables if present (do NOT rewrite tables into plain bullets).
 
-2) Then give an **Evidence** section with 3–5 bullet points maximum, picking only the strongest
-   signals, for example:
-   - defect/align anomaly ratios vs threshold (just approximate levels, not every number)
-   - overdue or failed calibrations
-   - STAGE_POS_X/Y WARN or ALERT occurrences
-   - clear patterns across tools/recipes (tool drift vs process drift)
+If a "domain_explain" step exists, use it as the main body and lightly edit for clarity.
+Otherwise:
+1) Verdict (1–2 sentences)
+2) Defect evidence table
+3) Optional next steps (0–2 bullets)
 
-3) Optionally add a **Next steps** section with 2–3 concrete recommendations.
-
-Constraints:
-- Do NOT dump raw SQL, column lists, or per-run tables.
-- Do NOT repeat the entire step history; use it only as background.
-- Keep the whole answer roughly within 150–250 words.
-
-For non-health questions, still follow:
-- Short summary first
-- Then a few key bullets or short paragraphs with the most relevant details only.
-
-For questions answered via documentation search (RAG), you may see steps with
-step_type "rag_qa" and a "rag_hits" field containing text snippets from manuals.
-Use those snippets as primary evidence when forming your answer, but still keep
-the reply compact and user-friendly.
-
+Do not include raw SQL or debug.
 """
 
 
 def aggregator_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
-    """Build result aggregator node callable."""
-
     def _node(state: GraphState) -> GraphState:
+        steps = state.get("step_results", [])
         messages = [
             {"role": "system", "content": AGGREGATOR_PROMPT},
             {
@@ -60,8 +39,10 @@ def aggregator_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                 "content": json.dumps(
                     {
                         "user_query": state.get("user_query", ""),
-                        "steps": state.get("step_results", []),
                         "clarifications": state.get("clarification_answers", {}),
+                        "steps": steps,
+                        # ★ include markdown so aggregator can align with your latest rules
+                        "markdown": (state.get("markdown_knowledge", "") or "")[:4000],
                     }
                 ),
             },
@@ -70,13 +51,9 @@ def aggregator_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
         response = llm.invoke(messages)
         content = response.content if hasattr(response, "content") else ""
         state["final_answer"] = content
+
         if logger:
-            logger.info(
-                "[aggregator] steps=%s answer_len=%s llm=%s",
-                len(state.get("step_results", [])),
-                len(content),
-                content[:300].replace("\n", " "),
-            )
+            logger.info("[aggregator] steps=%s answer_len=%s", len(steps), len(content))
         return state
 
     return _node

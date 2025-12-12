@@ -71,4 +71,4 @@ How’s the system health for 8950XR-P2 over the last 7 days?
 
 How to open KTGem Deep View 2.0 Application?
 
-What is the defect rate trend for the 8950XR-P2 from 20251201 to 20251207? Create a line chart.
+What is the defect rate trend for the 8950XR-P1 from 20251201 to 20251207? Create a line chart.

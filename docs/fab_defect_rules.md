@@ -1,67 +1,160 @@
-# Defect & Drift Rules
+# System Health, Fab Defect & Drift Rules
 
-## 1. Time Window
-- Use latest `inspection_runs.start_time` as `window_end`.
-- `window_start = window_end - 24h` (or other configured window).
-- All analysis only uses runs in `[window_start, window_end]`.
+This document is the **single source of truth** for:
 
-## 2. Run-Level Anomaly
+- How to compute defect anomalies per (tool, recipe).
+- How to classify **Tool Drift** vs **Process (Recipe) Drift**.
+- How to decide whether a tool/system is **Healthy** or **Unhealthy**.
+- How to interpret calibration overdue and wafer-center abnormal behavior.
 
-### High Defect
-A run is high-defect if:
-- `defect_count_total > DEFECT_HIGH_THRESHOLD` (default 50), OR
-- `run_result = 'HIGH_DEFECT'`.
+All agents that reason about health or drift must follow these rules exactly.
 
-### Alignment Failure
-A run has align fail if:
-- `run_time_align_fail > 0`, OR
-- `run_result = 'ALIGN_FAIL'`.
+---
 
-## 3. Per (tool, recipe) Aggregation
+## 1. Time Windows
 
-For each `(tool_id, recipe_id)` in the window:
+When a user asks about “this week vs last week” or “the past week”:
 
-- `total_runs`
-- `abnormal_defect_runs` = count of high-defect runs
-- `abnormal_align_runs` = count of align-fail runs
+- **This week**: the most recent 7 calendar days up to and including the current analysis date.
+- **Last week**: the 7 days immediately preceding “this week”.
 
-Ratios:
+The exact date boundaries are implemented in SQL; this document only defines the logic.
 
-- `defect_anomaly_ratio = abnormal_defect_runs / total_runs`
-- `align_anomaly_ratio  = abnormal_align_runs / total_runs`
-- If `total_runs = 0` → ratios = 0.
+---
 
-## 4. Status Threshold
+## 2. `defects_daily`: the only source for system health classification
 
-Global ratio threshold:
+Each row represents defect count data for a specific tool, recipe, and date.  
+It includes:
 
-- `ANOMALY_RATIO_THRESHOLD = 0.05` (5%)
+- `pre_defectwise_count`: the number of defects detected before processing.
+- `post_defectwise_count`: the number of defects detected after processing.
 
-Status:
+For health monitoring and drift analysis, **only `pre_defectwise_count` is used**.
 
-- `DEFECT_STATUS = HIGH` if `defect_anomaly_ratio > threshold`, else `NORMAL`.
-- `ALIGN_STATUS = HIGH` if `align_anomaly_ratio  > threshold`, else `NORMAL`.
+---
 
-A **problem pair** is any `(tool, recipe)` where
-- `DEFECT_STATUS = HIGH` OR `ALIGN_STATUS = HIGH`.
+### 2.1 Weekly sums per (tool, recipe)
 
-If all pairs are NORMAL → system is overall healthy (in this dimension).
+- `S_this_week(T, R)` = sum of `pre_defectwise_count` over **this week**.
+- `S_last_week(T, R)` = sum of `pre_defectwise_count` over **last week**.
 
-## 5. Drift Type (Tool vs Process)
+If `S_last_week(T, R) > 0`, define:
+diff_pct(T, R) = abs(S_this_week(T, R) - S_last_week(T, R)) / S_last_week(T, R)
+Interpretation for `(T, R)`:
 
-For a problem pair `(tool = T*, recipe = R)`:
+- If `diff_pct(T, R) > 0.10` → `(T, R)` is **anomalous this week**.
+- Otherwise → `(T, R)` is **not anomalous**.
+- If `S_last_week(T, R) == 0` → baseline is insufficient; treat the drift state
+  as **UNKNOWN** and explicitly mention this if relevant.
 
-1. Compute status for all tools on recipe `R`.
-2. Mark each tool abnormal on `R` if:
-   - `DEFECT_STATUS = HIGH` OR `ALIGN_STATUS = HIGH`.
+---
 
-Let `current_tool = T*`, `other_tools = all tools ≠ T*`:
+### 2.2 Recipe-level drift: Tool vs Process
 
-- If current is NOT abnormal → `drift_type = UNKNOWN`.
-- If current is abnormal and:
-  - `other_abnormal_count = 0` → `TOOL_DRIFT`.
-  - `other_abnormal_count = len(other_tools)` → `PROCESS_DRIFT`.
-  - else → `MIXED`.
+For each recipe `R`, consider all tools `{T}` that run `R`.
 
-This drift label is only about **pattern of anomalies across tools**,
-not about root cause by itself.
+Let `K` be the number of tools whose `(T, R)` is anomalous this week.
+
+Rules:
+
+- `K == 0`  
+  → Recipe `R` is stable this week (no drift).
+
+- `K == 1`  
+  → The single anomalous `(T, R)` is classified as **Tool Drift** for that
+    particular tool on recipe `R`.
+
+- `K >= 2`  
+  → Recipe `R` is classified as **Process Drift**; all anomalous `(T, R)` pairs
+    on `R` are considered process-driven rather than tool-driven.
+
+---
+
+### 2.3 Tool / system health
+
+For a given tool `T`, look at all recipes `R` that `T` runs:
+
+- If **any** recipe `R` on tool `T` is classified as **Tool Drift**  
+  → Tool `T` (the “system”) is **Unhealthy** and is said to have drifted as
+    shown on recipe `R`.
+
+- If **no** recipe on `T` is Tool Drift  
+  (i.e., recipes are either Stable, Process Drift, or UNKNOWN)  
+  → Tool `T` is considered **Healthy** from the tool perspective.
+
+If some `(T, R)` are UNKNOWN (e.g., `S_last_week(T, R) == 0`), the tool can still
+be Healthy, but the answer should mention that parts of the baseline are
+insufficient.
+
+> **Important**:
+> - Only `defects_daily` and the rules above decide **Healthy vs Unhealthy** and
+>   **Tool Drift vs Process Drift**.
+> - Nothing from `calibrations` or `wc_points` is allowed to override this
+>   classification.
+
+---
+
+## 3. `calibrations`: overdue checks (supporting evidence only)
+
+Logical columns:
+
+- `calibrations(tool, subsystem, cal_name, last_cal_date, freq_days)`
+
+For each row `(T, SubS, Cal)`:
+due_date = last_cal_date + freq_days (in days)
+Let `D` be the analysis date (typically “today”).
+
+- If `D > due_date` → that calibration for `(T, SubS, Cal)` is **overdue**.
+- If `D <= due_date` → it is **not overdue yet**.
+
+Usage:
+
+- Overdue calibrations are treated as **possible reasons** for tool-level drift
+  or subsystem problems.
+
+---
+
+## 4. `wc_points`: wafer-center abnormal behavior
+
+Logical columns:
+
+- `wc_points(tool, date, timestamp, x, y, recipe)`
+
+Each row represents one inspection’s wafer-center coordinates for a given
+(tool, recipe) and time.
+
+---
+
+### 4.1 Single-run Stage abnormality
+
+For a single row `(x, y)`:
+
+Wafer center coordinate is abnormal for this run if:
+
+
+abs(x) > 150 OR abs(y) > 150
+
+---
+
+### 4.2 Weekly Stage abnormal counts and change
+
+For each `(T, R)`:
+
+- `ST_ab_this_week(T, R)` = number of rows in the time window where the run is abnormal.
+- `ST_sum_this_week(T, R)` = total number of rows in the time window.
+- `wc_abnormal_ratio(T, R)` =  
+  `ST_ab_this_week(T, R) / ST_sum_this_week(T, R)`
+
+Interpretation:
+
+- If `wc_abnormal_ratio(T, R) > 0.05`  
+  → wafer-center is considered **abnormal this week**.  
+    This indicates the Stage subsystem is not healthy.
+- Otherwise → Stage subsystem is considered stable.
+
+Usage:
+
+- Wafer-center abnormality is used to describe **subsystem health** and
+  **possible reasons** behind tool-level drift, especially for the Stage
+  subsystem.

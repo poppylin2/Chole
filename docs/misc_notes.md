@@ -1,61 +1,89 @@
-# Misc Notes (Compact)
+# Misc Notes for the Fab Copilot
 
-## 1. Time & Window
+This document focuses on **agent behavior and answer style**.
 
-- Default analysis window: last 24h of `inspection_runs.start_time`.
-- Derived as:
-  - `window_end = max(start_time)`
-  - `window_start = window_end - 24h`
+## 1. Clarifications and context usage
 
-Can be tuned (e.g., 8h / 72h) depending on use case.
+- The router is responsible for deciding when a clarification is needed and for
+  asking the clarification question (for example, when a `tool_id` is missing for
+  a system-health query).
+- Downstream agents (planner, analysts, reporter) should:
+  - Use the `clarifications` field and recent `history` to resolve which tool
+    and recipe are in scope.
+  - Avoid guessing missing identifiers when the router has not provided them.
 
-## 2. Thresholds
+## 2. Answer style for system health / drift
 
-- `DEFECT_HIGH_THRESHOLD = 50` for high-defect runs.
-- `ANOMALY_RATIO_THRESHOLD = 0.05` for status HIGH vs NORMAL.
+When giving the **first-pass** system or tool health answer
+(using only `defects_daily` + `fab_defect_rules.md`),
+structure the response as:
 
-In a real fab, thresholds may:
-- Differ per recipe/tool.
-- Be based on historical statistics.
+1. **Verdict (1–2 sentences)**
 
-## 3. Status Fields
+   - Clearly state which tool (and optionally which time window) is being
+     evaluated, and whether it is Healthy or Unhealthy.
+   - Mention the key drift classification if relevant
+     (Tool Drift vs Process Drift).
 
-### `inspection_runs.run_result`
-- Convenience label like `NORMAL`, `HIGH_DEFECT`, `ALIGN_FAIL`.
-- Numeric fields (`defect_count_total`, `run_time_align_fail`) are primary.
+2. **Defect-based evidence (2–4 bullets or a small table)**
 
-### `calibration_runs.status`
-- `PASSED` / `FAILED`.  
-- Overdue is inferred via `next_due_time < now`, not via status string.
+   - Focus on a few important `(tool, recipe)` pairs:
+     - weekly sums this week vs last week,
+     - whether they are anomalous,
+     - whether the anomalies are classified as Tool or Process Drift.
 
-### `subsystem_health_metrics.status`
-- `OK` / `WARN` / `ALERT`.  
-- `WARN`/`ALERT` treated as problematic even if numeric value is near spec.
+   - List the evidence in a markdown table format.
 
-## 4. Interpretation Pattern
+3. **Optional next steps (0–2 bullets)**
 
-When investigating a (tool, recipe) problem:
+   - High-level suggestions such as monitoring a recipe or checking relevant
+     subsystems, based on the evidence, without introducing new data sources.
 
-1. Check outcome anomalies:
-   - defect / align anomaly ratios.
-2. Check calibration:
-   - overdue or FAILED?
-3. Check subsystem metrics:
-   - STAGE_POS_X/Y out-of-spec, `WARN`/`ALERT`?
-4. Compare tools:
-   - Only one tool abnormal → likely **TOOL_DRIFT**.
-   - Many tools on same recipe abnormal → likely **PROCESS_DRIFT**.
-   - Mixed → **MIXED**; need deeper investigation.
+## 3. Answer style for “reason / subsystem” follow-ups
 
-## 5. Synthetic Data Reminder
+For follow-up questions about reasons, calibration overdue, or
+subsystem / Stage / wafer-center behavior:
 
-- `data.sqlite` is synthetic.
-- Encodes:
-  - One clear tool drift example: `P2` + `S13Layer`.
-  - One clear process drift example: `WadiLayer` across tools.
-- Intended for agent reasoning / demo, not real fab production data.
+1. **Restate the defect-based verdict briefly**
 
-## 6. System Health Questions
+   - Remind the user whether the tool is Healthy or Unhealthy, and which recipes
+     show Tool / Process Drift.
 
-- Treat each tool as a separate "system".
-- If no tool_id is provided, ask the user to choose one.
+2. **Use additional signals to explain “why”**
+
+   - Use `calibrations` to highlight overdue calibrations if there’s any.
+   - Use `wc_points` to summarize how much Stage / wafer-center abnormal behavior
+     there is, if any.
+
+3. **Suggest concrete actions where appropriate**
+
+   - Examples: perform a specific Stage calibration, or monitor a recipe on all
+     tools for a few more days.
+
+---
+
+## A MUST-FOLLOW Demo Conversation Pattern
+
+1. **System health question**
+
+   - If user asks about system / tool health
+     (e.g., “How is system health?” or “Is tool 8950XR-P1 drifting?”).
+   - The agent determines the target tool (possibly via clarification) and then
+     uses **only table `defects_daily`** and the rules in
+     **`eqp_knowledge.md`** and **`fab_defect_rules.md`** to decide:
+     - Healthy vs Unhealthy for that tool.
+     - Tool Drift vs Process Drift vs no drift per recipe.
+
+2. **System health answer (defect_count based only)**
+
+   - The agent reports the tool’s health and, if needed, mentions which recipes
+     show tool-level vs process-level drift.
+   - At this stage the agent does **not** use `calibrations` or `wc_points`.
+
+3. **Follow-up on reasons / subsystem health**
+
+   - If the user then asks about **reasons**, **calibration overdue**, or
+     **subsystem / Stage / wafer-center health**, the agent:
+     - keeps the original Healthy / Unhealthy conclusion unchanged,
+     - queries `calibrations` and/or `wc_points`,
+     - explains possible reasons and subsystem behavior as supporting evidence.

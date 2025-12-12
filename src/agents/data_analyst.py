@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-import re
 import logging
+import re
+from dataclasses import asdict
+from pathlib import Path
 from typing import Dict, List, Optional
 
-from dataclasses import asdict
-
+import pandas as pd
 from langchain_openai import ChatOpenAI
 
 from core.models import GraphState, StepResult, TableSchema
@@ -26,15 +27,15 @@ If a LIMIT is not provided it will be auto-applied.
 PYTHON_AGENT_PROMPT = """
 You are a data analyst running Python on cached CSV datasets (pandas, numpy available).
 Use the provided dataset mapping to load files.
-Create useful metrics: trends, anomalies, correlations.
 Save plots using save_plot() helper if needed and add paths to `plots` list.
 Set `metrics` dict and optional `result` summary text.
 Return only JSON with keys: code (string), rationale.
 """
 
+TOOL_ID_RE = re.compile(r"^8950XR-P[1-4]$", flags=re.IGNORECASE)
+
 
 def strip_code_fence(text: str) -> str:
-    """Remove leading/trailing code fences (```sql / ```json / ```)."""
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```\\w*\\s*", "", text)
@@ -44,7 +45,6 @@ def strip_code_fence(text: str) -> str:
 
 
 def extract_sql(text: str) -> str:
-    """Extract SQL from JSON payloads or fenced code blocks."""
     cleaned = strip_code_fence(text)
     try:
         parsed = json.loads(cleaned)
@@ -52,7 +52,6 @@ def extract_sql(text: str) -> str:
             return parsed["sql"]
     except Exception:
         pass
-
     fence = re.search(r"```sql(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if fence:
         return fence.group(1).strip()
@@ -60,7 +59,6 @@ def extract_sql(text: str) -> str:
 
 
 def extract_code(text: str) -> str:
-    """Extract Python code from JSON or fenced blocks."""
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict) and "code" in parsed:
@@ -73,13 +71,210 @@ def extract_code(text: str) -> str:
     return text.strip()
 
 
-def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_index: Dict[str, str], max_rows: int):
-    """Build data analyst node callable."""
+def _sanitize_tool(tool: str) -> Optional[str]:
+    t = (tool or "").strip()
+    if TOOL_ID_RE.fullmatch(t):
+        return t.upper()
+    return None
 
+
+def _sql_defect_drift_weekly(tool: str) -> str:
+    # analysis_end_date is derived from data (max(defects_daily.date)) for reproducibility
+    return f"""
+WITH params AS (
+  SELECT
+    date((SELECT max(date) FROM defects_daily)) AS end_date,
+    date((SELECT max(date) FROM defects_daily), '-6 day') AS this_start,
+    date((SELECT max(date) FROM defects_daily), '-13 day') AS last_start,
+    date((SELECT max(date) FROM defects_daily), '-7 day') AS last_end
+),
+weekly AS (
+  SELECT
+    d.tool,
+    d.recipe,
+    SUM(CASE
+          WHEN date(d.date) BETWEEN (SELECT this_start FROM params) AND (SELECT end_date FROM params)
+          THEN d.pre_defectwise_count ELSE 0 END
+    ) AS this_sum,
+    SUM(CASE
+          WHEN date(d.date) BETWEEN (SELECT last_start FROM params) AND (SELECT last_end FROM params)
+          THEN d.pre_defectwise_count ELSE 0 END
+    ) AS last_sum
+  FROM defects_daily d
+  GROUP BY d.tool, d.recipe
+),
+calc AS (
+  SELECT
+    tool, recipe, this_sum, last_sum,
+    CASE
+      WHEN last_sum > 0 THEN abs(this_sum - last_sum) * 1.0 / last_sum
+      ELSE NULL
+    END AS diff_pct,
+    CASE
+      WHEN last_sum > 0 AND abs(this_sum - last_sum) * 1.0 / last_sum > 0.10 THEN 1
+      ELSE 0
+    END AS is_anom
+  FROM weekly
+),
+recipe_k AS (
+  SELECT
+    recipe,
+    SUM(CASE WHEN is_anom = 1 THEN 1 ELSE 0 END) AS k_anom
+  FROM calc
+  GROUP BY recipe
+),
+labeled AS (
+  SELECT
+    c.tool,
+    c.recipe,
+    c.this_sum,
+    c.last_sum,
+    c.diff_pct,
+    rk.k_anom,
+    CASE
+      WHEN c.last_sum = 0 THEN 'UNKNOWN_BASELINE'
+      WHEN c.is_anom = 0 THEN 'STABLE'
+      WHEN rk.k_anom = 1 THEN 'TOOL_DRIFT'
+      ELSE 'PROCESS_DRIFT'
+    END AS drift_label
+  FROM calc c
+  JOIN recipe_k rk USING (recipe)
+),
+tool_status AS (
+  SELECT
+    tool,
+    CASE WHEN SUM(CASE WHEN drift_label='TOOL_DRIFT' THEN 1 ELSE 0 END) > 0
+      THEN 'UNHEALTHY' ELSE 'HEALTHY' END AS tool_health,
+    SUM(CASE WHEN drift_label='TOOL_DRIFT' THEN 1 ELSE 0 END) AS tool_drift_recipe_count,
+    SUM(CASE WHEN drift_label='UNKNOWN_BASELINE' THEN 1 ELSE 0 END) AS unknown_baseline_recipe_count
+  FROM labeled
+  GROUP BY tool
+)
+SELECT
+  (SELECT end_date FROM params) AS analysis_end_date,
+  (SELECT this_start FROM params) AS this_week_start,
+  (SELECT end_date FROM params) AS this_week_end,
+  (SELECT last_start FROM params) AS last_week_start,
+  (SELECT last_end FROM params) AS last_week_end,
+
+  l.tool,
+  l.recipe,
+  l.this_sum AS s_this_week,
+  l.last_sum AS s_last_week,
+  ROUND(l.diff_pct, 4) AS diff_pct,
+  l.k_anom,
+  l.drift_label,
+
+  ts.tool_health,
+  ts.tool_drift_recipe_count,
+  ts.unknown_baseline_recipe_count
+FROM labeled l
+JOIN tool_status ts ON ts.tool = l.tool
+WHERE l.tool = '{tool}'
+ORDER BY
+  CASE l.drift_label
+    WHEN 'TOOL_DRIFT' THEN 3
+    WHEN 'PROCESS_DRIFT' THEN 2
+    WHEN 'UNKNOWN_BASELINE' THEN 1
+    ELSE 0
+  END DESC,
+  l.recipe ASC;
+""".strip()
+
+
+def _sql_calibration_overdue(tool: str) -> str:
+    return f"""
+WITH params AS (
+  SELECT date((SELECT max(date) FROM defects_daily)) AS end_date
+)
+SELECT
+  (SELECT end_date FROM params) AS analysis_end_date,
+  c.tool,
+  c.subsystem,
+  c.cal_name,
+  c.last_cal_date,
+  c.freq_days,
+  date(c.last_cal_date, printf('+%d day', c.freq_days)) AS due_date,
+  CASE
+    WHEN date((SELECT end_date FROM params)) > date(c.last_cal_date, printf('+%d day', c.freq_days))
+    THEN 1 ELSE 0
+  END AS is_overdue
+FROM calibrations c
+WHERE c.tool = '{tool}'
+ORDER BY is_overdue DESC, due_date ASC;
+""".strip()
+
+
+def _sql_stage_wc_weekly(tool: str) -> str:
+    return f"""
+WITH params AS (
+  SELECT
+    date((SELECT max(date) FROM defects_daily)) AS end_date,
+    date((SELECT max(date) FROM defects_daily), '-6 day') AS this_start
+)
+SELECT
+  (SELECT end_date FROM params) AS analysis_end_date,
+  (SELECT this_start FROM params) AS this_week_start,
+  (SELECT end_date FROM params) AS this_week_end,
+
+  w.tool,
+  w.recipe,
+  COUNT(*) AS wc_total,
+  SUM(CASE WHEN abs(w.x) > 150 OR abs(w.y) > 150 THEN 1 ELSE 0 END) AS wc_abnormal,
+  ROUND(
+    CASE WHEN COUNT(*) = 0 THEN 0 ELSE 1.0 * SUM(CASE WHEN abs(w.x) > 150 OR abs(w.y) > 150 THEN 1 ELSE 0 END) / COUNT(*) END,
+    4
+  ) AS wc_abnormal_ratio
+FROM wc_points w
+WHERE w.tool = '{tool}'
+  AND date(w.date) BETWEEN (SELECT this_start FROM params) AND (SELECT end_date FROM params)
+GROUP BY w.tool, w.recipe
+ORDER BY wc_abnormal_ratio DESC, wc_total DESC, w.recipe ASC;
+""".strip()
+
+
+def _sql_defect_trend_range(tool: str, date_from: str, date_to: str) -> str:
+    return f"""
+SELECT
+  date(d.date) AS run_date,
+  d.tool,
+  d.recipe,
+  SUM(d.pre_defectwise_count) AS total_defects,
+  COUNT(*) AS total_rows
+FROM defects_daily d
+WHERE d.tool = '{tool}'
+  AND date(d.date) BETWEEN date('{date_from}') AND date('{date_to}')
+GROUP BY date(d.date), d.tool, d.recipe
+ORDER BY run_date ASC;
+""".strip()
+
+
+def _load_rows_if_small(
+    csv_path: str, row_count: int, cap: int = 50
+) -> Optional[List[Dict]]:
+    if row_count <= 0:
+        return []
+    if row_count > cap:
+        return None
+    try:
+        df = pd.read_csv(csv_path)
+        return df.to_dict(orient="records")
+    except Exception:
+        return None
+
+
+def data_analyst_node(
+    llm: ChatOpenAI,
+    db_path,
+    runtime_cache: Path,
+    table_markdown_index: Dict[str, str],
+    max_rows: int,
+):
     logger: logging.Logger | None = runtime_cache and logging.getLogger("fab_agent")
 
     def _sql_state_update(state: GraphState, sql: str, reasoning: str) -> GraphState:
         summary = execute_sqlite_query(sql, db_path, runtime_cache, max_rows=max_rows)
+
         step_result: StepResult = {
             "step_id": state.get("next_action", {}).get("id", "sql"),
             "step_type": "sql_analysis",
@@ -89,17 +284,28 @@ def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_in
 
         if summary.get("status") == "ok":
             dataset_id = summary["dataset_id"]
+            csv_path = summary["csv_path"]
+            row_count = summary.get("row_count", 0)
+
             state.setdefault("data_artifacts", {})[dataset_id] = {
-                "csv_path": summary["csv_path"],
-                "row_count": summary.get("row_count", 0),
+                "csv_path": csv_path,
+                "row_count": row_count,
                 "columns": summary.get("columns", []),
                 "sample_preview": summary.get("sample_preview"),
             }
+
             step_result["dataset_id"] = dataset_id
-            step_result["dataset_path"] = summary["csv_path"]
+            step_result["dataset_path"] = csv_path
+            step_result["preview_rows"] = summary.get("sample_preview")
+
+            # ★ If the dataset is small, attach full rows (capped) so LLM can format a correct table.
+            rows = _load_rows_if_small(csv_path, row_count, cap=50)
+            if rows is not None:
+                step_result["rows"] = rows
+
             step_result["summary"] = (
                 reasoning
-                + f"\nRows: {summary.get('row_count', 0)}, Columns: {summary.get('columns', [])}"
+                + f"\nRows: {row_count}, Columns: {summary.get('columns', [])}"
             )
         else:
             step_result["error"] = summary.get("error_message", "Unknown SQL error.")
@@ -108,20 +314,24 @@ def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_in
 
         if logger:
             logger.info(
-                "[data_analyst][sql] step_id=%s status=%s rows=%s tables=%s error=%s sql=%s",
+                "[data_analyst][sql] step_id=%s status=%s rows=%s tables=%s error=%s",
                 step_result["step_id"],
                 summary.get("status"),
                 summary.get("row_count"),
                 step_result.get("used_tables"),
                 summary.get("error_message"),
-                sql[:200].replace("\n", " "),
             )
+
         state.setdefault("step_results", []).append(step_result)
         state["next_action"] = None
         return state
 
-    def _python_state_update(state: GraphState, code: str, rationale: str) -> GraphState:
-        datasets = {k: v["csv_path"] for k, v in state.get("data_artifacts", {}).items()}
+    def _python_state_update(
+        state: GraphState, code: str, rationale: str
+    ) -> GraphState:
+        datasets = {
+            k: v["csv_path"] for k, v in state.get("data_artifacts", {}).items()
+        }
         analysis_result = run_python_analysis(code, datasets, runtime_cache)
 
         step_result: StepResult = {
@@ -131,11 +341,15 @@ def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_in
         }
 
         if analysis_result.get("status") == "ok":
-            step_result["summary"] = f"{rationale}\n{analysis_result.get('summary_text','')}"
+            step_result["summary"] = (
+                f"{rationale}\n{analysis_result.get('summary_text','')}"
+            )
             step_result["metrics"] = analysis_result.get("metrics")
             step_result["plots"] = analysis_result.get("plot_paths")
         else:
-            step_result["error"] = analysis_result.get("error_message", "Python execution failed.")
+            step_result["error"] = analysis_result.get(
+                "error_message", "Python execution failed."
+            )
 
         if logger:
             logger.info(
@@ -145,6 +359,7 @@ def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_in
                 analysis_result.get("plot_paths"),
                 analysis_result.get("error_message"),
             )
+
         state.setdefault("step_results", []).append(step_result)
         state["next_action"] = None
         return state
@@ -155,6 +370,72 @@ def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_in
         if action_type not in {"sql_analysis", "python_analysis"}:
             return state
 
+        # ---------------------------------------------------------
+        # Deterministic SQL templates for the new 3-table rules
+        # ---------------------------------------------------------
+        if action_type == "sql_analysis":
+            action_id = action.get("id", "")
+            tool = _sanitize_tool(action.get("tool", "") or "")
+            if action_id in {
+                "defect_drift_weekly",
+                "calibration_overdue",
+                "stage_wc_weekly",
+                "defect_trend_range",
+            }:
+                if not tool:
+                    step_result: StepResult = {
+                        "step_id": action_id or "sql",
+                        "step_type": "sql_analysis",
+                        "summary": "Missing or invalid tool id for deterministic analysis.",
+                        "error": "Tool must be one of: 8950XR-P1/P2/P3/P4",
+                    }
+                    state.setdefault("step_results", []).append(step_result)
+                    state["next_action"] = None
+                    return state
+
+                if action_id == "defect_drift_weekly":
+                    sql = _sql_defect_drift_weekly(tool)
+                    return _sql_state_update(
+                        state,
+                        sql,
+                        "Computed weekly defect sums and drift labels per rules (defects_daily only).",
+                    )
+
+                if action_id == "calibration_overdue":
+                    sql = _sql_calibration_overdue(tool)
+                    return _sql_state_update(
+                        state,
+                        sql,
+                        "Checked calibration due dates (supporting evidence only).",
+                    )
+
+                if action_id == "stage_wc_weekly":
+                    sql = _sql_stage_wc_weekly(tool)
+                    return _sql_state_update(
+                        state,
+                        sql,
+                        "Summarized wafer-center abnormal ratio for this week (supporting evidence only).",
+                    )
+
+                if action_id == "defect_trend_range":
+                    dfrom = (action.get("date_from") or "").strip()
+                    dto = (action.get("date_to") or "").strip()
+                    if not re.fullmatch(
+                        r"\d{4}-\d{2}-\d{2}", dfrom
+                    ) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", dto):
+                        return _sql_state_update(
+                            state,
+                            "SELECT 1 AS error;",
+                            "Invalid date range format; expected YYYY-MM-DD.",
+                        )
+                    sql = _sql_defect_trend_range(tool, dfrom, dto)
+                    return _sql_state_update(
+                        state, sql, "Fetched daily defect totals for plotting."
+                    )
+
+        # ---------------------------------------------------------
+        # Generic LLM-driven paths (kept for other queries)
+        # ---------------------------------------------------------
         tables = action.get("tables") or []
         table_descriptions: List[TableSchema] = (
             [t for t in state.get("database_schema", {}).tables if t.name in tables]  # type: ignore
@@ -162,7 +443,9 @@ def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_in
             else []
         )
 
-        table_notes = "\n".join(table_markdown_index.get(t, "") for t in tables if t in table_markdown_index)
+        table_notes = "\n".join(
+            table_markdown_index.get(t, "") for t in tables if t in table_markdown_index
+        )
 
         if action_type == "sql_analysis":
             messages = [
@@ -187,17 +470,15 @@ def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_in
                 reasoning = parsed.get("reasoning", reasoning)
             except Exception:
                 pass
-            state.setdefault("step_results", [])
-            # record raw llm content in the step result downstream
             updated_state = _sql_state_update(state, sql, reasoning)
             if updated_state.get("step_results"):
                 updated_state["step_results"][-1]["raw_llm"] = raw_llm
-            if logger:
-                logger.info("[data_analyst][sql][llm] %s", raw_llm[:500].replace("\n", " "))
             return updated_state
 
         # python_analysis
-        datasets = {k: v["csv_path"] for k, v in state.get("data_artifacts", {}).items()}
+        datasets = {
+            k: v["csv_path"] for k, v in state.get("data_artifacts", {}).items()
+        }
         messages = [
             {"role": "system", "content": PYTHON_AGENT_PROMPT},
             {
@@ -217,8 +498,6 @@ def data_analyst_node(llm: ChatOpenAI, db_path, runtime_cache, table_markdown_in
         updated_state = _python_state_update(state, code, rationale)
         if updated_state.get("step_results"):
             updated_state["step_results"][-1]["raw_llm"] = raw_llm
-        if logger:
-            logger.info("[data_analyst][python][llm] %s", raw_llm[:500].replace("\n", " "))
         return updated_state
 
     return _node
