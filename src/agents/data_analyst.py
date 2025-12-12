@@ -79,14 +79,14 @@ def _sanitize_tool(tool: str) -> Optional[str]:
 
 
 def _sql_defect_drift_weekly(tool: str) -> str:
-    # analysis_end_date is derived from data (max(defects_daily.date)) for reproducibility
+    # analysis_end_date now uses the current system date
     return f"""
 WITH params AS (
   SELECT
-    date((SELECT max(date) FROM defects_daily)) AS end_date,
-    date((SELECT max(date) FROM defects_daily), '-6 day') AS this_start,
-    date((SELECT max(date) FROM defects_daily), '-13 day') AS last_start,
-    date((SELECT max(date) FROM defects_daily), '-7 day') AS last_end
+    date('now', 'localtime') AS end_date,
+    date('now', 'localtime', '-6 day') AS this_start,
+    date('now', 'localtime', '-13 day') AS last_start,
+    date('now', 'localtime', '-7 day') AS last_end
 ),
 weekly AS (
   SELECT
@@ -185,7 +185,7 @@ ORDER BY
 def _sql_calibration_overdue(tool: str) -> str:
     return f"""
 WITH params AS (
-  SELECT date((SELECT max(date) FROM defects_daily)) AS end_date
+  SELECT date('now', 'localtime') AS end_date
 )
 SELECT
   (SELECT end_date FROM params) AS analysis_end_date,
@@ -209,8 +209,8 @@ def _sql_stage_wc_weekly(tool: str) -> str:
     return f"""
 WITH params AS (
   SELECT
-    date((SELECT max(date) FROM defects_daily)) AS end_date,
-    date((SELECT max(date) FROM defects_daily), '-6 day') AS this_start
+    date('now', 'localtime') AS end_date,
+    date('now', 'localtime', '-6 day') AS this_start
 )
 SELECT
   (SELECT end_date FROM params) AS analysis_end_date,
