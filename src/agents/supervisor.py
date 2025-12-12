@@ -25,11 +25,36 @@ Rules (must follow):
   the defects_daily-based verdict.
 - For any "system/tool health" question, you must know which tool (e.g., 8950XR-P2).
   If tool is missing, ask the user to choose one.
+- For other data questions, propose a JSON next action that lets the data_analyst run
+  a SQL query on the relevant tables.
 Return JSON next action.
 """
 
 
 TOOL_RE = re.compile(r"\b8950XR-P[1-4]\b", flags=re.IGNORECASE)
+
+# Minimal keyword-to-table mapping to auto-route ad-hoc data lookups
+TABLE_KEYWORDS = {
+    "defect": "defects_daily",
+    "drift": "defects_daily",
+    "recipe": "defects_daily",
+    "calibration": "calibrations",
+    "wafer": "wc_points",
+    "wc_": "wc_points",
+    "stage": "wc_points",
+}
+
+
+def _infer_tables(user_query: str, schema: DatabaseSchema) -> List[str]:
+    ql = (user_query or "").lower()
+    seen = set()
+    for kw, tbl in TABLE_KEYWORDS.items():
+        if kw in ql:
+            seen.add(tbl)
+    if seen:
+        return sorted(seen)
+    # Fallback: expose all tables if no keyword matches
+    return sorted([t.name for t in schema.tables]) if schema and schema.tables else []
 
 
 def summarize_results(results: List[StepResult]) -> str:
@@ -137,6 +162,16 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
         is_trend = any(
             k in ql for k in ["trend", "line chart", "plot", "graph", "折线", "趋势"]
         )
+        is_subsystem = any(
+            k in ql
+            for k in [
+                "subsystem",
+                "sub-system",
+                "stage health",
+                "wafer center",
+                "wc_points",
+            ]
+        )
 
         tool = _extract_tool(user_query, clarifications)
 
@@ -153,6 +188,38 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                     "id": "tool",
                     "question": state["next_action"]["clarification_question"],  # type: ignore[index]
                 }
+                state["subsystem_mode"] = False
+                return state
+
+            # Subsystem-only health path: focus on calibrations + wafer-center
+            if is_subsystem:
+                queue: List[NextAction] = [
+                    {
+                        "action_type": "sql_analysis",
+                        "id": "calibration_overdue",
+                        "description": "Check overdue calibrations (subsystem health).",
+                        "tables": ["calibrations"],
+                        "tool": tool,
+                    },
+                    {
+                        "action_type": "sql_analysis",
+                        "id": "stage_wc_weekly",
+                        "description": "Summarize wafer-center abnormal ratio for Stage subsystem.",
+                        "tables": ["wc_points"],
+                        "tool": tool,
+                    },
+                    {
+                        "action_type": "domain_explain",
+                        "id": "domain_explain",
+                        "description": "Explain subsystem health using calibration and wafer-center only.",
+                    },
+                ]
+                state["action_queue"] = queue
+                state["next_action"] = state["action_queue"].pop(0)
+                state["pending_clarification"] = None
+                state["subsystem_mode"] = True
+                if logger:
+                    logger.info("[supervisor][subsystem] tool=%s queued=%s", tool, len(queue))
                 return state
 
             # Build deterministic plan:
@@ -195,6 +262,7 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
             state["action_queue"] = queue
             state["next_action"] = state["action_queue"].pop(0)
             state["pending_clarification"] = None
+            state["subsystem_mode"] = False
             if logger:
                 logger.info(
                     "[supervisor][health] tool=%s reason=%s queued=%s",
@@ -274,7 +342,41 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
             return state
 
         # ---------------------------------------------------------
-        # 3) Otherwise fall back to the LLM supervisor (generic questions, RAG, etc.)
+        # 3) Generic ad-hoc data lookup: give the data analyst a shot
+        # ---------------------------------------------------------
+        schema: DatabaseSchema = state.get("database_schema", DatabaseSchema(tables=[]))  # type: ignore
+        inferred_tables = _infer_tables(user_query, schema)
+        # A lightweight heuristic: if the query mentions data-ish keywords or we can infer tables,
+        # let the SQL agent try first before the generic LLM handoff.
+        dataish = any(
+            k in ql
+            for k in [
+                "defect",
+                "calibration",
+                "wafer",
+                "table",
+                "count",
+                "sum",
+                "date",
+                "recipe",
+                "trend",
+            ]
+        )
+        if dataish and inferred_tables:
+            state["action_queue"] = []
+            state["next_action"] = {
+                "action_type": "sql_analysis",
+                "id": "ad_hoc_sql",
+                "description": "Ad-hoc SQL lookup based on user question.",
+                "tables": inferred_tables,
+                # pass through tool hint if present; SQL agent can choose to use it
+                "tool": tool,
+            }
+            state["pending_clarification"] = None
+            return state
+
+        # ---------------------------------------------------------
+        # 4) Otherwise fall back to the LLM supervisor (generic questions, RAG, etc.)
         # ---------------------------------------------------------
         schema: DatabaseSchema = state.get("database_schema", DatabaseSchema(tables=[]))  # type: ignore
         schema_text = json.dumps(schema.to_dict())

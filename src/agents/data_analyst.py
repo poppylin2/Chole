@@ -437,15 +437,21 @@ def data_analyst_node(
         # Generic LLM-driven paths (kept for other queries)
         # ---------------------------------------------------------
         tables = action.get("tables") or []
-        table_descriptions: List[TableSchema] = (
-            [t for t in state.get("database_schema", {}).tables if t.name in tables]  # type: ignore
-            if hasattr(state.get("database_schema", None), "tables")
-            else []
-        )
+        db_schema = state.get("database_schema", None)
+        if hasattr(db_schema, "tables"):
+            if tables:
+                table_descriptions = [t for t in db_schema.tables if t.name in tables]  # type: ignore
+            else:
+                table_descriptions = list(db_schema.tables)  # type: ignore
+        else:
+            table_descriptions = []
 
-        table_notes = "\n".join(
-            table_markdown_index.get(t, "") for t in tables if t in table_markdown_index
-        )
+        if tables:
+            table_notes = "\n".join(
+                table_markdown_index.get(t, "") for t in tables if t in table_markdown_index
+            )
+        else:
+            table_notes = "\n".join(table_markdown_index.values())
 
         if action_type == "sql_analysis":
             messages = [
