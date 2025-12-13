@@ -37,6 +37,7 @@ def aggregator_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                     {
                         "user_query": state.get("user_query", ""),
                         "clarifications": state.get("clarification_answers", {}),
+                        "chat_history": state.get("chat_history", []),
                         "steps": steps,
                         # ★ include markdown so aggregator can align with your latest rules
                         "markdown": (state.get("markdown_knowledge", "") or "")[:4000],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Dict, List
 
 import streamlit as st
@@ -19,6 +20,8 @@ if "pending_clarification" not in st.session_state:
     st.session_state.pending_clarification = None
 if "last_user_query" not in st.session_state:
     st.session_state.last_user_query = ""
+if "last_tool" not in st.session_state:
+    st.session_state.last_tool = ""
 
 
 # ----- Dynamic node construction & rendering -----
@@ -244,29 +247,49 @@ def render_history():
 
 render_history()
 
+
+def _build_chat_history(limit: int = 12) -> List[Dict[str, str]]:
+    history: List[Dict[str, str]] = []
+    for msg in st.session_state.messages[-limit:]:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role in ("user", "assistant") and content:
+            history.append({"role": str(role), "content": str(content)})
+    return history
+
+
 # ----- Input box -----
 prompt = st.chat_input("Ask about fab inspection data or equipment insights")
 
 if prompt:
     user_query = prompt
-    clarification_payload = dict(st.session_state.clarification_answers)
+    clarification_payload: Dict[str, str] = {}
 
     # If currently answering a clarification question
     if st.session_state.pending_clarification:
+        clarification_payload = dict(st.session_state.clarification_answers)
         clar_id = st.session_state.pending_clarification.get("id")
         if clar_id:
             clarification_payload[clar_id] = prompt
             st.session_state.clarification_answers[clar_id] = prompt
+            if clar_id in ("tool", "tool_id"):
+                m = re.search(r"8950XR-P[1-4]", prompt, flags=re.IGNORECASE)
+                if m:
+                    st.session_state.last_tool = m.group(0).upper()
         user_query = st.session_state.last_user_query or prompt
         st.session_state.pending_clarification = None
     else:
         # New user query
+        st.session_state.clarification_answers = {}
         st.session_state.last_user_query = user_query
 
     # Store user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
+
+    chat_history = _build_chat_history(limit=12)
+    last_tool = st.session_state.last_tool
 
     try:
         final_state = None
@@ -281,7 +304,10 @@ if prompt:
 
             # ★ Stream graph execution and update UI nodes at each step
             for state in stream_graph(
-                user_query, clarification_answers=clarification_payload
+                user_query,
+                clarification_answers=clarification_payload,
+                chat_history=chat_history,
+                last_tool=last_tool,
             ):
                 final_state = state
 
@@ -370,6 +396,9 @@ if prompt:
                 "plots": plot_entries,
             }
             st.session_state.messages.append(msg)
+            # Persist last tool if updated by the graph
+            if final_state.get("last_tool"):
+                st.session_state.last_tool = final_state.get("last_tool")
 
     except Exception as exc:
         error_text = (

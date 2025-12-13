@@ -102,6 +102,8 @@ def build_graph(
 def _init_app_and_state(
     user_query: str,
     clarification_answers: Optional[Dict[str, str]] = None,
+    chat_history: Optional[list[Dict[str, str]]] = None,
+    last_tool: str | None = None,
 ):
     config = load_config()
     logger = setup_logging(config.runtime_cache / "agent.log")
@@ -114,6 +116,8 @@ def _init_app_and_state(
         "markdown_knowledge": markdown_knowledge,
         "table_markdown_index": table_markdown_index,
         "clarification_answers": clarification_answers or {},
+        "chat_history": chat_history or [],
+        "last_tool": last_tool or "",
         "step_results": [],
         "data_artifacts": {},
         "next_action": None,
@@ -133,16 +137,24 @@ def _init_app_and_state(
 def run_graph_once(
     user_query: str,
     clarification_answers: Optional[Dict[str, str]] = None,
+    chat_history: Optional[list[Dict[str, str]]] = None,
+    last_tool: str | None = None,
 ) -> GraphState:
-    app, initial_state = _init_app_and_state(user_query, clarification_answers)
+    app, initial_state = _init_app_and_state(
+        user_query, clarification_answers, chat_history, last_tool
+    )
     return app.invoke(initial_state, config={"recursion_limit": 60})
 
 
 def stream_graph(
     user_query: str,
     clarification_answers: Optional[Dict[str, str]] = None,
+    chat_history: Optional[list[Dict[str, str]]] = None,
+    last_tool: str | None = None,
 ) -> Iterator[GraphState]:
-    app, initial_state = _init_app_and_state(user_query, clarification_answers)
+    app, initial_state = _init_app_and_state(
+        user_query, clarification_answers, chat_history, last_tool
+    )
     for state in app.stream(
         initial_state,
         config={"recursion_limit": 60},

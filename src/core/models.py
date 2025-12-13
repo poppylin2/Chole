@@ -97,6 +97,10 @@ class GraphState(TypedDict, total=False):
     database_schema: DatabaseSchema
     markdown_knowledge: str
     table_markdown_index: Dict[str, str]
+    # ★ optional recent chat history for multi-turn context (role/content only)
+    chat_history: List[Dict[str, str]]
+    # ★ remember last confirmed tool to avoid repeated clarifications
+    last_tool: str
 
     next_action: Optional[NextAction]
     # ★ deterministic plan queue

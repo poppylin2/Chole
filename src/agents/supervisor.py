@@ -65,18 +65,38 @@ def summarize_results(results: List[StepResult]) -> str:
     return "\n".join(parts)
 
 
-def _extract_tool(user_query: str, clarifications: Dict[str, str]) -> Optional[str]:
-    # 1) clarification wins
+def _extract_tool(
+    user_query: str,
+    clarifications: Dict[str, str],
+    last_tool: Optional[str],
+    chat_history: Optional[List[Dict[str, str]]] = None,
+) -> Optional[str]:
+    # 1) prefer explicit tool mention in the current user query
+    m = TOOL_RE.search(user_query or "")
+    if m:
+        return m.group(0).upper()
+
+    # 2) clarification wins (from current pending question)
     for k in ("tool", "tool_id"):
         if k in clarifications:
             v = (clarifications.get(k) or "").strip()
             m = TOOL_RE.search(v)
             if m:
                 return m.group(0).upper()
-    # 2) parse from query
-    m = TOOL_RE.search(user_query or "")
-    if m:
-        return m.group(0).upper()
+
+    # 3) fall back to remembered last_tool for follow-up questions
+    if last_tool:
+        m = TOOL_RE.search(last_tool)
+        if m:
+            return m.group(0).upper()
+
+    # 4) scan recent chat history for the most recent tool mention
+    if chat_history:
+        for msg in reversed(chat_history):
+            m = TOOL_RE.search(msg.get("content", ""))
+            if m:
+                return m.group(0).upper()
+
     return None
 
 
@@ -101,6 +121,13 @@ def _extract_date_range(user_query: str) -> Optional[tuple[str, str]]:
     return d1, d2
 
 
+def _has_successful_step(state: GraphState, step_id: str) -> bool:
+    for s in state.get("step_results", []):
+        if s.get("step_id") == step_id and not s.get("error"):
+            return True
+    return False
+
+
 def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
     def _node(state: GraphState) -> GraphState:
         state["loop_count"] = state.get("loop_count", 0) + 1
@@ -115,6 +142,8 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
 
         user_query = state.get("user_query", "") or ""
         clarifications = state.get("clarification_answers", {}) or {}
+        last_tool = state.get("last_tool", "")
+        chat_history = state.get("chat_history", [])
 
         # ---------------------------------------------------------
         # 0) If there is a deterministic action queue, pop next.
@@ -129,6 +158,16 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                 logger.info(
                     "[supervisor][queue] next=%s remaining=%s", nxt.get("id"), len(q)
                 )
+            return state
+
+        # If ad-hoc SQL already succeeded once, finalize instead of re-running it 20 times.
+        if _has_successful_step(state, "ad_hoc_sql"):
+            state["next_action"] = {
+                "action_type": "finish",
+                "id": "finish",
+                "description": "Summarize existing SQL result.",
+            }
+            state["pending_clarification"] = None
             return state
 
         # ---------------------------------------------------------
@@ -173,7 +212,7 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
             ]
         )
 
-        tool = _extract_tool(user_query, clarifications)
+        tool = _extract_tool(user_query, clarifications, last_tool, chat_history)
 
         # Health queries must have tool
         if is_health:
@@ -213,11 +252,17 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                         "id": "domain_explain",
                         "description": "Explain subsystem health using calibration and wafer-center only.",
                     },
+                    {
+                        "action_type": "finish",
+                        "id": "finish",
+                        "description": "Wrap up subsystem health answer.",
+                    },
                 ]
                 state["action_queue"] = queue
                 state["next_action"] = state["action_queue"].pop(0)
                 state["pending_clarification"] = None
                 state["subsystem_mode"] = True
+                state["last_tool"] = tool
                 if logger:
                     logger.info("[supervisor][subsystem] tool=%s queued=%s", tool, len(queue))
                 return state
@@ -258,11 +303,19 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                     "description": "Explain findings and format the answer per rules (verdict + evidence table).",
                 }
             )
+            queue.append(
+                {
+                    "action_type": "finish",
+                    "id": "finish",
+                    "description": "Summarize and return final answer.",
+                }
+            )
 
             state["action_queue"] = queue
             state["next_action"] = state["action_queue"].pop(0)
             state["pending_clarification"] = None
             state["subsystem_mode"] = False
+            state["last_tool"] = tool
             if logger:
                 logger.info(
                     "[supervisor][health] tool=%s reason=%s queued=%s",
@@ -305,6 +358,7 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                 state["action_queue"] = queue2
                 state["next_action"] = state["action_queue"].pop(0)
                 state["pending_clarification"] = None
+                state["last_tool"] = tool
                 return state
 
         # ---------------------------------------------------------
@@ -382,6 +436,10 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
         schema_text = json.dumps(schema.to_dict())
         markdown = state.get("markdown_knowledge", "")
         previous = summarize_results(state.get("step_results", []))
+        chat_history = state.get("chat_history") or []
+        history_text = "\n".join(
+            f"{m.get('role', '')}: {m.get('content', '')}" for m in chat_history[-12:]
+        )
 
         messages = [
             {"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT},
@@ -390,6 +448,7 @@ def supervisor_node(llm: ChatOpenAI, logger: logging.Logger | None = None):
                 "content": (
                     f"User query:\n{user_query}\n\n"
                     f"Clarification answers:\n{json.dumps(clarifications)}\n\n"
+                    f"Conversation history (oldest→newest, capped):\n{history_text}\n\n"
                     f"Database schema:\n{schema_text}\n\n"
                     f"Markdown knowledge:\n{markdown[:4000]}\n\n"
                     f"Recent results:\n{previous}"
