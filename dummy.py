@@ -47,8 +47,9 @@ week1_sums = {}
 UNHEALTHY_COMBOS = {
     # Only make P2's S13/S14/S15 abnormal -> these recipes trigger Tool Drift at k=1
     "8950XR-P2": {"S13Layer", "S14Layer", "S15Layer"},
-    # Only make P3's WadiLayer abnormal
+    # Only make P1 and P3's WadiLayer abnormal
     "8950XR-P3": {"WadiLayer"},
+    "8950XR-P1": {"WadiLayer"},
 }
 
 
@@ -104,9 +105,9 @@ for tool in TOOLS:
         for attempt in range(MAX_ATTEMPTS):
             pre_list = [random.randint(800, 1200) for _ in week2_dates]
             sum_week2 = sum(pre_list)
-            diff_ratio = abs(sum_week2 - sum_week1) / sum_week1
+            diff_ratio = (sum_week2 - sum_week1) / sum_week1
 
-            if target_healthy and diff_ratio <= 0.10:
+            if target_healthy and 0 <= diff_ratio <= 0.10:
                 # healthy: diff <= 10%
                 break
             if (not target_healthy) and diff_ratio > 0.10:
